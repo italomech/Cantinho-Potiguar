@@ -1,5 +1,11 @@
 const state = { products: [], cart: new Map(), deliveryFee: 0 };
-const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+function parsePrice(value) {
+	if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+	const normalized = String(value ?? '').trim().replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
+	const price = Number(normalized);
+	return Number.isFinite(price) ? price : 0;
+}
+const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(parsePrice(value));
 const $ = selector => document.querySelector(selector);
 const apiBase = window.CANTINHO_API_BASE || '';
 
@@ -16,7 +22,7 @@ document.getElementById('year').textContent = new Date().getFullYear();
 async function loadCatalog() {
 	const [productsResponse, settingsResponse] = await Promise.all([apiFetch('/api/products'), apiFetch('/api/settings')]);
 	if (!productsResponse.ok || !settingsResponse.ok) throw new Error('Não foi possível carregar o cardápio.');
-	state.products = await productsResponse.json();
+	state.products = (await productsResponse.json()).map(product => ({ ...product, id: String(product.id), price: parsePrice(product.price ?? Number(product.priceCents) / 100) }));
 	state.deliveryFee = (await settingsResponse.json()).deliveryFee;
 	const aliases = { 'creme-de-frango': 'Creme de Frango', panqueca: 'Panqueca', strogonoff: 'Strogonoff', lasanha: 'Lasanha', 'escondidinho-de-carne': 'Escondidinho de Carne' };
 	for (const [slug, name] of Object.entries(aliases)) {
@@ -31,14 +37,14 @@ async function loadCatalog() {
 	}
 }
 
-function cartItems() { return [...state.cart.entries()].map(([productId, quantity]) => ({ product: state.products.find(item => item.id === productId), quantity })).filter(item => item.product); }
+function cartItems() { return [...state.cart.entries()].map(([productId, quantity]) => ({ product: state.products.find(item => String(item.id) === String(productId)), quantity })).filter(item => item.product); }
 function normalizeNeighborhood(value) { return String(value || '').trim().toLocaleLowerCase('pt-BR'); }
 function calculateDeliveryFee(neighborhood, deliveryMethod) {
 	if (deliveryMethod === 'PICKUP') return 0;
 	return ['upanema', 'ipanema'].includes(normalizeNeighborhood(neighborhood)) ? 5 : 2;
 }
 function totals() {
-	const subtotal = cartItems().reduce((total, item) => total + item.product.price * item.quantity, 0);
+	const subtotal = cartItems().reduce((total, item) => total + parsePrice(item.product.price) * Number(item.quantity), 0);
 	const deliveryMethod = document.querySelector('input[name="deliveryMethod"]:checked')?.value;
 	const neighborhood = document.querySelector('input[name="neighborhood"]')?.value;
 	const delivery = calculateDeliveryFee(neighborhood, deliveryMethod);
@@ -57,7 +63,7 @@ function renderCart() {
 	$('[data-checkout-delivery]').textContent = money(summary.delivery);
 	$('[data-checkout-total]').textContent = money(summary.total);
 }
-function changeCart(productId, delta) { const next = (state.cart.get(productId) || 0) + delta; next > 0 ? state.cart.set(productId, next) : state.cart.delete(productId); renderCart(); }
+function changeCart(productId, delta) { const normalizedProductId = String(productId); const next = (state.cart.get(normalizedProductId) || 0) + delta; next > 0 ? state.cart.set(normalizedProductId, next) : state.cart.delete(normalizedProductId); renderCart(); }
 function openCart() { $('[data-cart-panel]').classList.add('is-open'); $('.overlay').classList.add('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'false'); }
 function closeCart() { $('[data-cart-panel]').classList.remove('is-open'); $('.overlay').classList.remove('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'true'); }
 async function pollPaymentStatus(orderId) {
