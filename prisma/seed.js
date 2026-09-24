@@ -21,9 +21,15 @@ async function main() {
   });
   await prisma.setting.upsert({ where: { id: 'main' }, update: {}, create: { deliveryFeeCents: Number(process.env.DELIVERY_FEE_CENTS || 500) } });
   for (const [name, description, imageUrl] of products) {
-    const existing = await prisma.product.findFirst({ where: { name } });
-    if (!existing) await prisma.product.create({ data: { name, description, imageUrl, priceCents: 1500 } });
+    const existingProduct = await prisma.product.findFirst({ where: { name } });
+    if (existingProduct) continue;
+    await prisma.product.create({ data: { name, description, imageUrl, priceCents: 1500 } });
   }
 }
 
-main().finally(() => prisma.$disconnect());
+main()
+  .catch(error => {
+    console.error('Falha ao executar o seed:', error);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

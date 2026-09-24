@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "node --watch server.js",
     "build": "prisma generate",
-    "start": "node server.js",
+    "start": "npm run db:migrate && npm run seed && node server.js",
+    "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
-    "db:seed": "node prisma/seed.js",
+    "seed": "node seed.js",
+    "db:seed": "npm run seed",
     "prisma:generate": "prisma generate",
     "test:pix": "node test-mercadopago-pix.js",
     "test:status": "node test-mercadopago-status.js",
