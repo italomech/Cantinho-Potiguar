@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin | Cantinho Potiguar</title><link rel="stylesheet" href="styles.css" />
+</head>
+<body class="admin-page">
+  <main class="container admin-shell">
+    <header class="admin-header"><div><p class="eyebrow">Cantinho Potiguar</p><h1>Painel de pedidos</h1></div><button class="btn btn-secondary" data-logout> Sair </button></header>
+    <section class="admin-login" data-login><h2>Acesso administrativo</h2><form data-login-form><label>E-mail<input type="email" name="email" required /></label><label>Senha<input type="password" name="password" required minlength="8" /></label><button class="btn btn-primary" type="submit">Entrar</button><p class="form-message" data-login-message></p></form></section>
+    <section class="admin-content" data-admin-content hidden>
+      <div class="admin-toolbar"><div><h2>Pedidos</h2><p>Atualização automática a cada 15 segundos.</p></div><button class="btn btn-primary" data-refresh>Atualizar agora</button></div>
+      <div class="order-list" data-orders></div>
+      <div class="admin-grid"><section><h2>Produtos</h2><form class="admin-form" data-product-form><input type="hidden" name="id" /><label>Nome<input name="name" required /></label><label>Descrição<textarea name="description" required></textarea></label><label>Imagem (URL)<input name="imageUrl" type="url" required /></label><label>Preço em centavos<input name="priceCents" type="number" min="1" required /></label><label class="choice"><input name="active" type="checkbox" checked /> Ativo</label><button class="btn btn-primary" type="submit">Salvar produto</button><button class="btn btn-secondary" type="button" data-clear-product>Limpar</button><p class="form-message" data-product-message></p></form><div data-products></div></section><section><h2>Configurações</h2><form class="admin-form" data-settings-form><label>Taxa de entrega em centavos<input name="deliveryFeeCents" type="number" min="0" required /></label><button class="btn btn-primary" type="submit">Salvar taxa</button><p class="form-message" data-settings-message></p></form></section></div>
+    </section>
+  </main>
+  <script src="admin.js"></script>
+</body>
+</html>

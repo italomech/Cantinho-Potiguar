@@ -1,0 +1,31 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="700" fill="#6D0403"/>
+
+  <g transform="translate(600 316)" stroke="#E8D7A8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M-260 0C-260 110 -174 198 -60 198H60C174 198 260 110 260 0" fill="none"/>
+
+    <path d="M-180 18L-180 170" fill="none"/>
+    <path d="M-140 2L-140 170" fill="none"/>
+    <path d="M-100 -10L-100 170" fill="none"/>
+    <path d="M-60 -28L-60 170" fill="none"/>
+    <path d="M-36 20L-36 170" fill="none"/>
+    <path d="M90 -10L90 170" fill="none"/>
+    <path d="M130 6L130 170" fill="none"/>
+    <path d="M170 20L170 170" fill="none"/>
+    <path d="M210 60L210 170" fill="none"/>
+
+    <path d="M-230 16L-36 16L-36 158" fill="none"/>
+    <path d="M-18 8L110 120L214 10" fill="none"/>
+
+    <path d="M-12 30L-12 170" fill="none"/>
+    <path d="M0 116L-55 170" fill="none"/>
+    <path d="M46 96L90 170" fill="none"/>
+    <path d="M-90 90L-12 90" fill="none"/>
+    <path d="M82 88L146 88" fill="none"/>
+  </g>
+
+  <g>
+    <text x="600" y="500" text-anchor="middle" font-family="'Segoe Script', 'Lucida Handwriting', cursive" font-size="108" fill="#E8D7A8" font-style="italic" letter-spacing="-2">Cantinho Potiguar</text>
+    <text x="600" y="585" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="54" fill="#E8D7A8" letter-spacing="10">MARMITARIA</text>
+  </g>
+</svg>

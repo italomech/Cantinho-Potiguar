@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CANTINHO POTIGUAR</title>
+    <meta name="description" content="CANTINHO POTIGUAR - marmitas frescas e saborosas para o seu dia a dia." />
+    <meta name="theme-color" content="#6d0403" />
+    <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="container nav">
+        <div class="logo" aria-label="Cantinho Potiguar Marmitaria">
+          <span class="brand-name">Cantinho Potiguar</span>
+        </div>
+
+        <nav class="menu" aria-label="Menu principal">
+          <a href="#inicio">Início</a>
+          <a href="#cardapio">Cardápio</a>
+          <a href="#beneficios">Benefícios</a>
+          <a href="#avaliacoes">Avaliações</a>
+          <a href="#contato">Contato</a>
+        </nav>
+
+        <button class="btn btn-primary cart-trigger" type="button" data-open-cart>Peça agora <span class="cart-count" data-cart-count>0</span></button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" id="inicio">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow">Sabor de casa</p>
+            <h1>Delícias que aquecem o coração.</h1>
+            <p class="lead">
+              Marmitas e pratos caseiros com sabor autêntico, preparo cuidadoso e aquele toque de amor que faz toda a diferença.
+            </p>
+
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#cardapio">Ver cardápio</a>
+              <a class="btn btn-secondary" href="#cardapio">Fazer encomenda</a>
+            </div>
+
+            <ul class="hero-stats" aria-label="Estatísticas da página">
+              <li><strong>300+</strong><span>Clientes</span></li>
+              <li><strong>4.9/5</strong><span>Avaliação</span></li>
+              <li><strong>30 min</strong><span>Entrega</span></li>
+            </ul>
+          </div>
+
+        </div>
+      </section>
+
+      <section class="features container" id="beneficios">
+        <div class="section-heading">
+          <p class="eyebrow">Por que escolher</p>
+          <h2>Sabor e qualidade em cada jantar</h2>
+        
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <div class="icon">🥗</div>
+            <h3>Ingredientes frescos</h3>
+            <p>Selecionamos legumes, proteína e temperos para manter sabor e nutrição.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="icon">⏱️</div>
+            <h3>Praticidade</h3>
+            <p>Chegou da academia ou trabalho? peça logo sem perder tempo.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="icon">💪</div>
+            <h3>Nutrição</h3>
+            <p>Refeições balanceadas para manter energia e bem-estar durante o dia.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="menu" id="cardapio">
+        <div class="container">
+          <div class="section-heading center">
+            <p class="eyebrow">Cardápio</p>
+            <h2>Sabores que fazem você voltar</h2>
+          </div>
+
+          <div class="menu-grid">
+            <article class="menu-card" data-product-id="creme-de-frango">
+              <img src="https://www.receitasja.com.br/wp-content/uploads/2025/06/Creme-de-galinha-com-mandioquinha-1140x597.jpg" alt="Creme de frango" />
+              <div class="menu-body">
+                <div class="menu-header">
+                  <h3>Creme de Frango</h3>
+                  <span>R$ 15</span>
+                </div>
+                <p>Delicioso creme de frango com sabor caseiro e acompanhamento perfeito.</p>
+                <button class="btn btn-primary add-to-cart" type="button" data-product-id="creme-de-frango">Adicionar</button>
+              </div>
+            </article>
+
+            <article class="menu-card" data-product-id="panqueca">
+              <img src="https://guiadacozinha.com.br/wp-content/uploads/2018/04/panqueca-de-frango-com-palmito-_1_.webp" alt="Panqueca" />
+              <div class="menu-body">
+                <div class="menu-header">
+                  <h3>Panqueca</h3>
+                  <span>R$ 15</span>
+                </div>
+                <p>Panqueca macia, saborosa e muito bem preparada para surpreender.</p>
+                <button class="btn btn-primary add-to-cart" type="button" data-product-id="panqueca">Adicionar</button>
+              </div>
+            </article>
+
+            <article class="menu-card" data-product-id="strogonoff">
+              <img src="https://edge.osuper.com.br/LQJFRlnTMY6Q1dY_HVtV8BRogr4=/0x600/smart/https://osuper-ecommerce-koch.s3.sa-east-1.amazonaws.com/684cc08a-chatgpt-image-17072026-170028.png" alt="Strogonoff" />
+              <div class="menu-body">
+                <div class="menu-header">
+                  <h3>Strogonoff</h3>
+                  <span>R$ 15</span>
+                </div>
+                <p>Strogonoff cremoso, cheio de sabor e com aquele toque de casa.</p>
+                <button class="btn btn-primary add-to-cart" type="button" data-product-id="strogonoff">Adicionar</button>
+              </div>
+            </article>
+
+            <article class="menu-card" data-product-id="lasanha">
+              <img src="https://espaconatelie.com.br/wp-content/uploads/2025/05/lasanha-de-frango.jpg" alt="Lasanha" />
+              <div class="menu-body">
+                <div class="menu-header">
+                  <h3>Lasanha</h3>
+                  <span>R$ 15</span>
+                </div>
+                <p>Lasanha bem recheada, gratinada e com sabor irresistível.</p>
+                <button class="btn btn-primary add-to-cart" type="button" data-product-id="lasanha">Adicionar</button>
+              </div>
+            </article>
+
+            <article class="menu-card" data-product-id="escondidinho-de-carne">
+              <img src="https://tudodelicious.com/wp-content/uploads/2025/04/Escondidinho-de-carne-moida-1024x1024.jpg" alt="Escondidinho de carne" />
+              <div class="menu-body">
+                <div class="menu-header">
+                  <h3>Escondidinho de Carne</h3>
+                  <span>R$ 15</span>
+                </div>
+                <p>Uma opção irresistível, com carne suculenta e aquele sabor de comida caseira.</p>
+                <button class="btn btn-primary add-to-cart" type="button" data-product-id="escondidinho-de-carne">Adicionar</button>
+              </div>
+            </article>
+
+            <article class="menu-card">
+              <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTr8zGJQfsD5vCixiMfcAyiAvgjniHNDFDAq8N6g8a2l8DIlkUC0xrBVC2T&s=10" alt="Encomendas" />
+              <div class="menu-body">
+                <div class="menu-header">
+                  <h3>Encomendas</h3>
+                  <span>Valor a combinar</span>
+                </div>
+                <p>Também fazemos encomendas para eventos, festas e pedidos especiais.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="process container">
+        <div class="section-heading">
+          <p class="eyebrow">Como funciona</p>
+          <h2>Facilita sua rotina</h2>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <span>01</span>
+            <h3>Escolha</h3>
+            <p>Selecione a marmita ideal para o seu dia e suas preferências.</p>
+          </div>
+          <div class="step">
+            <span>02</span>
+            <h3>Preparo</h3>
+            <p>Cuidamos de cada etapa com ingredientes frescos e sabor caseiro.</p>
+          </div>
+          <div class="step">
+            <span>03</span>
+            <h3>Entrega</h3>
+            <p>Receba rápido em casa ou no trabalho, com praticidade e qualidade.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="reviews" id="avaliacoes">
+        <div class="container">
+          <div class="section-heading center">
+            <p class="eyebrow">Avaliações</p>
+            <h2>Quem pede ama</h2>
+          </div>
+
+          <div class="review-grid">
+            <article class="review-card">
+              <p>“A marmita é sempre fresca e muito saborosa. Perfeita para o janta do dia a dia.”</p>
+              <div class="reviewer">
+                <strong>Marina L.</strong>
+                <span>Nutricionista</span>
+              </div>
+            </article>
+
+            <article class="review-card">
+              <p>“Além de saudável, o sabor é incrível. Sinto que é comida de verdade, não só “diet”.”</p>
+              <div class="reviewer">
+                <strong>João P.</strong>
+                <span>Aluno de academia</span>
+              </div>
+            </article>
+
+            <article class="review-card">
+              <p>“Entrega rápida, atendimento ótimo e variedade muito boa. Adorei a opção vegana.”</p>
+              <div class="reviewer">
+                <strong>Fernanda T.</strong>
+                <span>Designer</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta" id="contato">
+        <div class="container cta-box">
+          <div>
+            <p class="eyebrow">Peça hoje mesmo</p>
+            <h2>Seu jantar saudável ficou muito mais fácil.</h2>
+            <p class="cta-text">Também fazemos encomendas para festas, reuniões e pedidos especiais.</p>
+          </div>
+          <a class="btn btn-primary" href="https://wa.me/message/6HNNN5CRWJ6JD1" target="_blank" rel="noreferrer">Falar no WhatsApp</a>
+        </div>
+      </section>
+    </main>
+
+    <aside class="cart-panel" data-cart-panel aria-hidden="true">
+      <div class="cart-panel-header">
+        <div><p class="eyebrow">Seu pedido</p><h2>Carrinho</h2></div>
+        <button class="icon-button" type="button" data-close-cart aria-label="Fechar carrinho">&times;</button>
+      </div>
+      <div class="cart-items" data-cart-items></div>
+      <div class="cart-summary">
+        <div><span>Subtotal</span><strong data-cart-subtotal>R$ 0,00</strong></div>
+        <div><span>Taxa de entrega</span><strong data-cart-delivery>R$ 0,00</strong></div>
+        <div class="total-row"><span>Total</span><strong data-cart-total>R$ 0,00</strong></div>
+        <button class="btn btn-primary checkout-button" type="button" data-open-checkout>Continuar</button>
+      </div>
+    </aside>
+    <div class="overlay" data-close-cart></div>
+
+    <dialog class="checkout-dialog" data-checkout-dialog>
+      <div class="checkout-header"><div><p class="eyebrow">Finalizar pedido</p><h2>Quase lá</h2></div><button class="icon-button" type="button" data-close-checkout aria-label="Fechar checkout">&times;</button></div>
+      <div class="checkout-grid">
+        <section><h3>Dados do cliente</h3><form data-checkout-form>
+          <label>Nome<input name="customerName" required minlength="2" autocomplete="name" /></label>
+          <label>WhatsApp<input name="phone" required autocomplete="tel" /></label>
+          <fieldset><legend>Forma de entrega</legend><label class="choice"><input type="radio" name="deliveryMethod" value="DELIVERY" checked /> Entrega</label><label class="choice"><input type="radio" name="deliveryMethod" value="PICKUP" /> Retirada no local</label></fieldset>
+          <div class="address-fields" data-address-fields><label>Endereço<input name="address" autocomplete="street-address" /></label><div class="form-row"><label>Número<input name="addressNumber" /></label><label>Bairro<input name="neighborhood" /></label></div><label>Complemento<input name="complement" /></label><label>Ponto de referência<input name="reference" /></label></div>
+          <fieldset><legend>Pagamento</legend><label class="choice"><input type="radio" name="paymentMethod" value="PIX" checked /> Pix</label><label class="choice"><input type="radio" name="paymentMethod" value="CARD" /> Cartão de crédito</label></fieldset>
+          <button class="btn btn-primary" type="submit">Confirmar pedido</button><p class="form-message" data-form-message></p>
+        </form></section>
+        <section class="checkout-order"><h3>Resumo do pedido</h3><div data-checkout-items></div><div class="summary-lines"><div><span>Subtotal</span><strong data-checkout-subtotal>R$ 0,00</strong></div><div><span>Entrega</span><strong data-checkout-delivery>R$ 0,00</strong></div><div class="total-row"><span>Total</span><strong data-checkout-total>R$ 0,00</strong></div></div><div class="payment-result" data-payment-result></div></section>
+      </div>
+    </dialog>
+
+    <footer class="footer">
+      <div class="container footer-inner">
+        <p>© <span id="year"></span> CANTINHO POTIGUAR</p>
+        <p>Contato: (84) 9811-5276</p>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model Product {
+  id          String      @id @default(cuid())
+  name        String
+  description String
+  imageUrl    String
+  priceCents  Int
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  orderItems  OrderItem[]
+}
+
+model Setting {
+  id             String @id @default("main")
+  deliveryFeeCents Int   @default(500)
+}
+
+model Order {
+  id                  String      @unique @default(cuid())
+  number              Int         @id @default(autoincrement())
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  customerName        String
+  phone               String
+  deliveryMethod      DeliveryMethod
+  address             String?
+  addressNumber       String?
+  complement          String?
+  neighborhood        String?
+  reference           String?
+  subtotalCents       Int
+  deliveryFeeCents    Int
+  totalCents          Int
+  paymentMethod       PaymentMethod
+  paymentStatus       PaymentStatus @default(PENDING)
+  orderStatus         OrderStatus   @default(RECEIVED)
+  paymentId           String?
+  preferenceId        String?
+  whatsappSendingAt   DateTime?
+  whatsappSentAt      DateTime?
+  whatsappMessageId   String?
+  items               OrderItem[]
+}
+
+model OrderItem {
+  id             String  @id @default(cuid())
+  orderId        String
+  productId      String
+  productName    String
+  unitPriceCents Int
+  quantity       Int
+  order          Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product @relation(fields: [productId], references: [id])
+}
+
+enum DeliveryMethod {
+  DELIVERY
+  PICKUP
+}
+
+enum PaymentMethod {
+  PIX
+  CARD
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum OrderStatus {
+  RECEIVED
+  PAYMENT_PENDING
+  PAID
+  PREPARING
+  OUT_FOR_DELIVERY
+  COMPLETED
+  CANCELLED
+}
