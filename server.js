@@ -21,6 +21,8 @@ const publicUrl = process.env.PUBLIC_URL || `http://localhost:${port}`;
 const mercadoPagoMode = process.env.MERCADOPAGO_ENV === 'production' ? 'production' : 'test';
 const mercadoPagoAccessToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
 const paymentPayerEmail = process.env.PAYMENT_PAYER_EMAIL?.trim();
+const mercadoPagoWebhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim();
+const mercadoPagoWebhookUrl = `${publicUrl}/api/webhooks/mercadopago`;
 const hasMercadoPagoToken = Boolean(mercadoPagoAccessToken && !/COLOQUE|SEU_TOKEN|YOUR_TOKEN/i.test(mercadoPagoAccessToken));
 const mercadoPago = hasMercadoPagoToken
   ? new MercadoPagoConfig({ accessToken: mercadoPagoAccessToken })
@@ -33,6 +35,7 @@ const whatsappConfig = getWhatsAppConfig();
 if (!jwtSecret) console.warn('JWT_SECRET nao configurado. A autenticacao administrativa nao pode iniciar com seguranca.');
 console.log('MERCADOPAGO_ACCESS_TOKEN configurado:', hasMercadoPagoToken);
 console.log('MERCADOPAGO_ENV:', mercadoPagoMode);
+console.log('MERCADOPAGO_WEBHOOK_URL:', mercadoPagoWebhookUrl);
 if (!whatsappConfig.accessToken || !whatsappConfig.phoneNumberId || !whatsappConfig.graphApiVersion || !whatsappConfig.templateName || !whatsappConfig.destination) {
   console.warn('WhatsApp Cloud API nao configurada. O pagamento continuara funcionando, mas pedidos aprovados nao serao enviados.');
 }
@@ -95,10 +98,15 @@ async function calculateOrder(input) {
   return { items, subtotalCents, deliveryFeeCents, totalCents: subtotalCents + deliveryFeeCents };
 }
 function paymentStatusFromGateway(status) {
-  if (status === 'approved') return 'APPROVED';
-  if (status === 'rejected') return 'REJECTED';
-  if (status === 'cancelled') return 'CANCELLED';
-  return 'PENDING';
+  const normalizedStatus = String(status || '').toLowerCase();
+  if (normalizedStatus === 'approved') return { paymentStatus: 'APPROVED', orderStatus: 'PAID' };
+  if (['rejected', 'cancelled', 'refunded', 'charged_back'].includes(normalizedStatus)) {
+    return { paymentStatus: 'REJECTED', orderStatus: 'CANCELLED' };
+  }
+  return { paymentStatus: 'PENDING', orderStatus: 'PAYMENT_PENDING' };
+}
+function isStalePaymentStatus(order, nextStatus) {
+  return order.paymentStatus !== 'PENDING' && nextStatus.paymentStatus === 'PENDING';
 }
 async function syncPayment(paymentId) {
   if (!paymentApi) throw new Error('Mercado Pago nao configurado.');
@@ -106,11 +114,22 @@ async function syncPayment(paymentId) {
   const conditions = [{ paymentId: String(payment.id) }];
   if (payment.external_reference) conditions.push({ id: String(payment.external_reference) });
   const order = await prisma.order.findFirst({ where: { OR: conditions } });
-  if (!order) return null;
+  if (!order) {
+    console.warn('Mercado Pago: pagamento sem pedido local:', String(payment.id));
+    return null;
+  }
   const status = paymentStatusFromGateway(payment.status);
-  const orderStatus = status === 'APPROVED' ? 'PAID' : status === 'CANCELLED' || status === 'REJECTED' ? 'CANCELLED' : 'PAYMENT_PENDING';
-  const updatedOrder = await prisma.order.update({ where: { id: order.id }, data: { paymentId: String(payment.id), paymentStatus: status, orderStatus } });
-  if (status === 'APPROVED') await sendPaidOrderToWhatsApp(updatedOrder.id);
+  if (isStalePaymentStatus(order, status)) {
+    console.log('Mercado Pago: status antigo ignorado:', String(payment.id), 'pedido:', order.id, 'status atual:', order.paymentStatus);
+    return order;
+  }
+  if (order.paymentId === String(payment.id) && order.paymentStatus === status.paymentStatus && order.orderStatus === status.orderStatus) {
+    if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(order.id);
+    return order;
+  }
+  const updatedOrder = await prisma.order.update({ where: { id: order.id }, data: { paymentId: String(payment.id), ...status } });
+  console.log('Mercado Pago: pagamento sincronizado:', String(payment.id), 'pedido:', order.id, 'status:', payment.status || 'unknown');
+  if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(updatedOrder.id);
   return updatedOrder;
 }
 
@@ -140,19 +159,36 @@ async function syncOrderFromMercadoPago(orderId) {
   const response = await fetch(`${mercadoPagoApiUrl}/v1/orders/${encodeURIComponent(orderId)}`, {
     headers: { Authorization: `Bearer ${mercadoPagoAccessToken}` }
   });
-  if (!response.ok) throw new Error(`Mercado Pago Orders API respondeu ${response.status}.`);
+  if (!response.ok) {
+  if (response.status === 400 || response.status === 404) {
+    console.warn(
+      `Mercado Pago: order ${String(orderId)} não encontrado na API (HTTP ${response.status}).`
+    );
+    return null;
+  }
+
+  throw new Error(`Mercado Pago Orders API respondeu ${response.status}.`);
+}
   const mercadoPagoOrder = await response.json();
   const payment = paymentFromOrderResponse(mercadoPagoOrder);
   const localOrder = await prisma.order.findFirst({
     where: { OR: [{ id: String(mercadoPagoOrder.external_reference || '') }, { paymentId: String(orderId) }, { preferenceId: String(orderId) }] }
   });
-  if (!localOrder) return null;
-  if (localOrder.paymentStatus === 'APPROVED' || localOrder.orderStatus === 'PAID') {
-    await sendPaidOrderToWhatsApp(localOrder.id);
-    return localOrder;
+  if (!localOrder) {
+    console.warn('Mercado Pago: order sem pedido local:', String(orderId));
+    return null;
   }
   const status = statusUpdateFromMercadoPago(mercadoPagoOrder, payment);
+  if (isStalePaymentStatus(localOrder, status)) {
+    console.log('Mercado Pago: status antigo ignorado:', String(orderId), 'pedido:', localOrder.id, 'status atual:', localOrder.paymentStatus);
+    return localOrder;
+  }
+  if (localOrder.paymentId === String(payment?.id || orderId) && localOrder.paymentStatus === status.paymentStatus && localOrder.orderStatus === status.orderStatus) {
+    if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(localOrder.id);
+    return localOrder;
+  }
   const updatedOrder = await prisma.order.update({ where: { id: localOrder.id }, data: { paymentId: String(payment?.id || orderId), ...status } });
+  console.log('Mercado Pago: order sincronizada:', String(orderId), 'pedido:', localOrder.id, 'status:', mercadoPagoOrder.status || 'unknown');
   if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(updatedOrder.id);
   return updatedOrder;
 }
@@ -235,7 +271,7 @@ async function createCheckoutPreference(order) {
       failure: `${publicUrl}/?payment=failure&order=${order.id}`
     },
     auto_return: 'approved',
-    notification_url: `${publicUrl}/api/webhooks/mercadopago`
+    notification_url: mercadoPagoWebhookUrl
   } });
 }
 
@@ -326,25 +362,42 @@ app.get('/api/orders/:id/payment-status', async (req, res) => {
   }
 });
 
+function hasValidMercadoPagoSignature(req, dataId) {
+  if (!mercadoPagoWebhookSecret) return false;
+  const signature = String(req.get('x-signature') || '');
+  const requestId = String(req.get('x-request-id') || '');
+  const signatureParts = Object.fromEntries(signature.split(',').map(part => part.trim().split('=')));
+  const timestamp = Number(signatureParts.ts);
+  const receivedSignature = Buffer.from(signatureParts.v1 || '', 'hex');
+  if (!requestId || !Number.isFinite(timestamp) || !signatureParts.v1 || Math.abs(Date.now() / 1000 - timestamp) > 5 * 60) return false;
+  const manifest = `id:${dataId};request-id:${requestId};ts:${signatureParts.ts};`;
+  const expectedSignature = crypto.createHmac('sha256', mercadoPagoWebhookSecret).update(manifest).digest();
+  return receivedSignature.length === expectedSignature.length && crypto.timingSafeEqual(expectedSignature, receivedSignature);
+}
+
 app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
-    const signature = req.headers['x-signature'];
-    const requestId = req.headers['x-request-id'];
-    const dataId = req.body?.data?.id || req.query['data.id'];
+    const eventType = String(req.body?.type || req.query.type || req.query.topic || '').toLowerCase();
+    const action = String(req.body?.action || req.query.action || '').toLowerCase();
+    const dataId = req.body?.data?.id || req.body?.id || req.query['data.id'] || req.query.id;
     if (!dataId) return res.sendStatus(400);
-    if (process.env.MERCADOPAGO_WEBHOOK_SECRET && (!signature || !requestId || !dataId)) return res.sendStatus(401);
-    if (process.env.MERCADOPAGO_WEBHOOK_SECRET) {
-      const parts = Object.fromEntries(String(signature).split(',').map(part => part.trim().split('=')));
-      const manifest = `id:${dataId};request-id:${requestId};ts:${parts.ts};`;
-      const digest = crypto.createHmac('sha256', process.env.MERCADOPAGO_WEBHOOK_SECRET).update(manifest).digest('hex');
-      const receivedDigest = Buffer.from(parts.v1 || '');
-      const expectedDigest = Buffer.from(digest);
-      if (receivedDigest.length !== expectedDigest.length || !crypto.timingSafeEqual(expectedDigest, receivedDigest)) return res.sendStatus(401);
+    if (!mercadoPagoWebhookSecret) {
+      console.error('Mercado Pago: MERCADOPAGO_WEBHOOK_SECRET nao configurado.');
+      return res.sendStatus(503);
     }
-    if (req.body?.type === 'payment' || req.query.type === 'payment') await syncPayment(String(dataId));
-    if (req.body?.type === 'order' || req.body?.action === 'order.updated' || req.query.type === 'order') await syncOrderFromMercadoPago(String(dataId));
+    if (!hasValidMercadoPagoSignature(req, String(dataId))) return res.sendStatus(401);
+    const isPaymentEvent = eventType === 'payment' || action.startsWith('payment.');
+    const isOrderEvent = eventType === 'order' || action.startsWith('order.');
+    if (isPaymentEvent) await syncPayment(String(dataId));
+    else if (isOrderEvent) await syncOrderFromMercadoPago(String(dataId));
+    else console.log('Mercado Pago: evento ignorado:', eventType || action || 'unknown');
     res.sendStatus(200);
-  } catch (error) { console.error('Webhook Mercado Pago:', error); res.sendStatus(500); }
+  } catch (error) {
+    const safeError = safeMercadoPagoError(error);
+    console.error('Webhook Mercado Pago HTTP status:', safeError.status || safeError.mercadoPagoStatus || 'unknown');
+    console.error('Webhook Mercado Pago erro:', safeError.mercadoPagoMessage || safeError.message || 'erro desconhecido');
+    res.sendStatus(500);
+  }
 });
 
 app.post('/api/admin/login', async (req, res) => {
