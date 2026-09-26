@@ -17,7 +17,7 @@ const app = express();
 const prisma = new PrismaClient();
 const port = Number(process.env.PORT || 3000);
 const jwtSecret = process.env.JWT_SECRET;
-const publicUrl = process.env.PUBLIC_URL || `http://localhost:${port}`;
+const publicUrl = process.env.PUBLIC_URL || 'https://cantinho-potiguar.onrender.com';
 const mercadoPagoMode = process.env.MERCADOPAGO_ENV === 'production' ? 'production' : 'test';
 const mercadoPagoAccessToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
 const paymentPayerEmail = process.env.PAYMENT_PAYER_EMAIL?.trim();
@@ -241,6 +241,14 @@ async function createPixOrder(order) {
     })
   });
   const responseBody = await response.json().catch(() => ({}));
+
+console.log(
+  'Mercado Pago: Order criada pelo SITE:',
+  responseBody.id,
+  'external_reference:',
+  responseBody.external_reference
+);
+
   if (!response.ok) {
     const error = new Error('Mercado Pago recusou a criacao do pagamento.');
     error.status = response.status;
@@ -364,22 +372,76 @@ app.get('/api/orders/:id/payment-status', async (req, res) => {
 
 function hasValidMercadoPagoSignature(req, dataId) {
   if (!mercadoPagoWebhookSecret) return false;
+
   const signature = String(req.get('x-signature') || '');
   const requestId = String(req.get('x-request-id') || '');
-  const signatureParts = Object.fromEntries(signature.split(',').map(part => part.trim().split('=')));
-  const timestamp = Number(signatureParts.ts);
-  const receivedSignature = Buffer.from(signatureParts.v1 || '', 'hex');
-  if (!requestId || !Number.isFinite(timestamp) || !signatureParts.v1 || Math.abs(Date.now() / 1000 - timestamp) > 5 * 60) return false;
-  const manifest = `id:${dataId};request-id:${requestId};ts:${signatureParts.ts};`;
-  const expectedSignature = crypto.createHmac('sha256', mercadoPagoWebhookSecret).update(manifest).digest();
-  return receivedSignature.length === expectedSignature.length && crypto.timingSafeEqual(expectedSignature, receivedSignature);
+
+  const signatureParts = Object.fromEntries(
+    signature.split(',').map(part => {
+      const [key, ...valueParts] = part.trim().split('=');
+      return [key, valueParts.join('=')];
+    })
+  );
+
+  const rawTimestamp = String(signatureParts.ts || '');
+  const timestamp = Number(rawTimestamp);
+  const receivedSignature = String(signatureParts.v1 || '');
+
+  console.log('MP WEBHOOK DEBUG:', {
+    hasSignature: Boolean(signature),
+    hasRequestId: Boolean(requestId),
+    hasDataIdQuery: Boolean(req.query['data.id']),
+    dataId: String(dataId || ''),
+    timestampDigits: rawTimestamp.length,
+    hasV1: Boolean(receivedSignature)
+  });
+
+  if (
+    !requestId ||
+    !Number.isFinite(timestamp) ||
+    !rawTimestamp ||
+    !receivedSignature
+  ) {
+    console.log('MP WEBHOOK SIGNATURE VALID:', false);
+    return false;
+  }
+
+  const timestampMs = timestamp > 1e12
+    ? timestamp
+    : timestamp * 1000;
+
+  if (Math.abs(Date.now() - timestampMs) > 5 * 60 * 1000) {
+    console.log('MP WEBHOOK SIGNATURE VALID:', false);
+    return false;
+  }
+
+  const normalizedDataId = String(dataId || '').toLowerCase();
+
+  const manifest =
+    `id:${normalizedDataId};request-id:${requestId};ts:${rawTimestamp};`;
+
+  const expectedSignature = crypto
+    .createHmac('sha256', mercadoPagoWebhookSecret)
+    .update(manifest)
+    .digest('hex');
+
+  const signatureValid =
+    receivedSignature.length === expectedSignature.length &&
+    crypto.timingSafeEqual(
+      Buffer.from(receivedSignature),
+      Buffer.from(expectedSignature)
+    );
+
+  console.log('MP WEBHOOK SIGNATURE VALID:', signatureValid);
+
+  return signatureValid;
 }
 
 app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
     const eventType = String(req.body?.type || req.query.type || req.query.topic || '').toLowerCase();
     const action = String(req.body?.action || req.query.action || '').toLowerCase();
-    const dataId = req.body?.data?.id || req.body?.id || req.query['data.id'] || req.query.id;
+    const dataId = String(req.query['data.id'] || req.body?.data?.id || req.body?.id || '').toLowerCase();
     if (!dataId) return res.sendStatus(400);
     if (!mercadoPagoWebhookSecret) {
       console.error('Mercado Pago: MERCADOPAGO_WEBHOOK_SECRET nao configurado.');
