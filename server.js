@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MercadoPagoConfig, Payment, Preference, WebhookSignatureValidator, InvalidWebhookSignatureError } from 'mercadopago';
+import { MercadoPagoConfig, Payment, Preference, } from 'mercadopago';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { getWhatsAppConfig, sendOrderToWhatsApp } from './whatsapp.js';
@@ -381,7 +381,6 @@ function hasValidMercadoPagoSignature(req, dataId) {
   'dataIdQuery=', String(req.query['data.id'] || '').trim().toLowerCase(),
   'dataIdBody=', String(req.body?.data?.id || '').trim().toLowerCase()
 );
-const crypto = require('crypto');
 
 const xSignature = req.get('x-signature') || '';
 const xRequestId = req.get('x-request-id') || '';
