@@ -7,7 +7,12 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MercadoPagoConfig, Payment, Preference, } from 'mercadopago';
+import {
+  MercadoPagoConfig,
+  Payment,
+  Preference,
+  WebhookSignatureValidator,
+} from 'mercadopago';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { getWhatsAppConfig, sendOrderToWhatsApp } from './whatsapp.js';
