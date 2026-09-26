@@ -374,12 +374,13 @@ function hasValidMercadoPagoSignature(req, dataId) {
   if (!mercadoPagoWebhookSecret) return false;
 
   try {
-  console.log('MP WEBHOOK DEBUG:', {
-    hasSignature: Boolean(req.get('x-signature')),
-    hasRequestId: Boolean(req.get('x-request-id')),
-    dataIdQuery: String(req.query['data.id'] || '').trim().toLowerCase(),
-    dataIdBody: String(req.body?.data?.id || '').trim().toLowerCase(),
-  });
+  console.log(
+  'MP WEBHOOK DEBUG:',
+  'hasSignature=', Boolean(req.get('x-signature')),
+  'hasRequestId=', Boolean(req.get('x-request-id')),
+  'dataIdQuery=', String(req.query['data.id'] || '').trim().toLowerCase(),
+  'dataIdBody=', String(req.body?.data?.id || '').trim().toLowerCase()
+);
 
     WebhookSignatureValidator.validate({
       xSignature: req.get('x-signature'),
