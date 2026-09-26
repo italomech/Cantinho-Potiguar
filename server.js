@@ -46,6 +46,43 @@ if (!whatsappConfig.accessToken || !whatsappConfig.phoneNumberId || !whatsappCon
 }
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || publicUrl, credentials: true }));
+app.post('/api/webhooks/mercadopago', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const rawBody = req.body;
+    const { type, data } = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
+    const paymentId = data?.id;
+
+    if (!paymentId || type !== 'payment') {
+      return res.status(200).send('Ignorado');
+    }
+
+    console.log(🔔 Notificação recebida! Tipo: ${type} | ID: ${paymentId});
+
+    const response = await fetch(${mercadoPagoApiUrl}/v1/payments/${paymentId}, {
+      headers: { 'Authorization': Bearer ${mercadoPagoAccessToken} }
+    });
+
+    const payment = await response.json();
+    console.log(📋 Status: ${payment.status});
+
+    if (payment.status === 'approved') {
+      const orderId = payment.external_reference;
+      if (!orderId) return res.status(200).send('OK');
+
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { status: 'PAID' }
+      });
+
+      console.log(✅ PEDIDO ${orderId} CONFIRMADO COMO PAGO! 💵);
+    }
+
+    return res.status(200).send('OK');
+  } catch (erro) {
+    console.error('❌ ERRO:', erro);
+    return res.status(200).send('OK');
+  }
+})
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 
