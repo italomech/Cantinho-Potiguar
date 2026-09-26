@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
+import { MercadoPagoConfig, Payment, Preference, WebhookSignatureValidator, InvalidWebhookSignatureError } from 'mercadopago';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { getWhatsAppConfig, sendOrderToWhatsApp } from './whatsapp.js';
@@ -373,70 +373,30 @@ app.get('/api/orders/:id/payment-status', async (req, res) => {
 function hasValidMercadoPagoSignature(req, dataId) {
   if (!mercadoPagoWebhookSecret) return false;
 
-  const signature = String(req.get('x-signature') || '');
-  const requestId = String(req.get('x-request-id') || '');
+  try {
+    WebhookSignatureValidator.validate({
+      xSignature: req.get('x-signature'),
+      xRequestId: req.get('x-request-id'),
+      dataId: String(dataId || req.query['data.id'] || ''),
+      secret: mercadoPagoWebhookSecret,
+    });
 
-  const signatureParts = Object.fromEntries(
-    signature.split(',').map(part => {
-      const [key, ...valueParts] = part.trim().split('=');
-      return [key, valueParts.join('=')];
-    })
-  );
+    console.log('MP WEBHOOK SIGNATURE VALID:', true);
+    return true;
+  } catch (error) {
+    if (error instanceof InvalidWebhookSignatureError) {
+      console.log('MP WEBHOOK SIGNATURE VALID:', false);
+      return false;
+    }
 
-  const rawTimestamp = String(signatureParts.ts || '');
-  const timestamp = Number(rawTimestamp);
-  const receivedSignature = String(signatureParts.v1 || '');
-
-  console.log('MP WEBHOOK DEBUG:', {
-    hasSignature: Boolean(signature),
-    hasRequestId: Boolean(requestId),
-    hasDataIdQuery: Boolean(req.query['data.id']),
-    dataId: String(dataId || ''),
-    timestampDigits: rawTimestamp.length,
-    hasV1: Boolean(receivedSignature)
-  });
-
-  if (
-    !requestId ||
-    !Number.isFinite(timestamp) ||
-    !rawTimestamp ||
-    !receivedSignature
-  ) {
-    console.log('MP WEBHOOK SIGNATURE VALID:', false);
-    return false;
-  }
-
-  const timestampMs = timestamp > 1e12
-    ? timestamp
-    : timestamp * 1000;
-
-  if (Math.abs(Date.now() - timestampMs) > 5 * 60 * 1000) {
-    console.log('MP WEBHOOK SIGNATURE VALID:', false);
-    return false;
-  }
-
-  const normalizedDataId = String(dataId || '').toLowerCase();
-
-  const manifest =
-    `id:${normalizedDataId};request-id:${requestId};ts:${rawTimestamp};`;
-
-  const expectedSignature = crypto
-    .createHmac('sha256', mercadoPagoWebhookSecret)
-    .update(manifest)
-    .digest('hex');
-
-  const signatureValid =
-    receivedSignature.length === expectedSignature.length &&
-    crypto.timingSafeEqual(
-      Buffer.from(receivedSignature),
-      Buffer.from(expectedSignature)
+    console.error(
+      'MP WEBHOOK SIGNATURE ERROR:',
+      error?.message || error
     );
 
-  console.log('MP WEBHOOK SIGNATURE VALID:', signatureValid);
-
-  return signatureValid;
+    return false;
+  }
 }
-
 app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
     const eventType = String(req.body?.type || req.query.type || req.query.topic || '').toLowerCase();
