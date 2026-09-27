@@ -406,7 +406,7 @@ const signatureParts = Object.fromEntries(
 const manifest = `id:${dataIdForSignature};request-id:${xRequestId};ts:${signatureParts.ts};`;
 
 const expectedSignature = crypto
-  .createHmac('sha256', String(mercadoPagoWebhookSecret).trim()
+  .createHmac('sha256', String(mercadoPagoWebhookSecret).trim())  
   .update(manifest)
   .digest('hex');
 console.log('MP HMAC INPUT:', {
