@@ -413,15 +413,12 @@ console.log(
   expectedSignature === signatureParts.v1
 );
 
-    WebhookSignatureValidator.validate({
-      xSignature: req.get('x-signature'),
-      xRequestId: req.get('x-request-id'),
-      dataId: String(dataId || req.query['data.id'] || '').trim(),
-      secret: mercadoPagoWebhookSecret,
-    });
+    const manualHmacValid = expectedSignature === signatureParts.v1;
 
-    console.log('MP WEBHOOK SIGNATURE VALID:', true);
-    return true;
+console.log('MP WEBHOOK SIGNATURE VALID:', manualHmacValid);
+
+return manualHmacValid;
+
   } catch (error) {
     if (error instanceof InvalidWebhookSignatureError) {
       console.log('MP WEBHOOK SIGNATURE VALID:', false);
