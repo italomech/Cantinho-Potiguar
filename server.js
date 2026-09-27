@@ -238,7 +238,10 @@ async function createPixOrder(order) {
       processing_mode: 'automatic',
       total_amount: money(order.totalCents).toFixed(2),
       external_reference: order.id,
-      payer: { email: paymentPayerEmail },
+      payer: {
+  email: paymentPayerEmail,
+  ...(mercadoPagoMode === 'test' ? { first_name: 'APRO' } : {})
+},
       transactions: {
         payments: [{
           amount: money(order.totalCents).toFixed(2),
