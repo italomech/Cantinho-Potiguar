@@ -380,66 +380,26 @@ app.get('/api/orders/:id/payment-status', async (req, res) => {
   }
 });
 
-function hasValidMercadoPagoSignature(req, dataId) {
+function hasValidMercadoPagoSignature(req) {
   if (!mercadoPagoWebhookSecret) return false;
 
   try {
-  console.log(
-  'MP WEBHOOK DEBUG:',
-  'hasSignature=', Boolean(req.get('x-signature')),
-  'hasRequestId=', Boolean(req.get('x-request-id')),
-  'dataIdQuery=', String(req.query['data.id'] || '').trim().toLowerCase(),
-  'dataIdBody=', String(req.body?.data?.id || '').trim().toLowerCase()
-);
+    WebhookSignatureValidator.validate({
+      xSignature: req.get('x-signature'),
+      xRequestId: req.get('x-request-id'),
+      dataId: req.query['data.id'],
+      secret: mercadoPagoWebhookSecret
+    });
 
-const xSignature = req.get('x-signature') || '';
-const xRequestId = req.get('x-request-id') || '';
-const dataIdForSignature = String(dataId || '').trim().toLowerCase();
-
-const signatureParts = Object.fromEntries(
-  xSignature.split(',').map((part) => {
-    const [key, ...value] = part.trim().split('=');
-    return [key, value.join('=')];
-  })
-);
-
-const manifest = `id:${dataIdForSignature};request-id:${xRequestId};ts:${signatureParts.ts};`;
-
-const expectedSignature = crypto
-  .createHmac('sha256', String(mercadoPagoWebhookSecret).trim())  
-  .update(manifest)
-  .digest('hex');
-console.log('MP HMAC INPUT:', {
-  manifest,
-  expectedPrefix: expectedSignature.slice(0, 12),
-  receivedPrefix: signatureParts.v1?.slice(0, 12),
-  ts: signatureParts.ts,
-  requestId: xRequestId,
-  dataId: dataIdForSignature
-});
-console.log(
-  'MP HMAC DEBUG:',
-  'manualHmacValid=',
-  expectedSignature === signatureParts.v1
-);
-
-    const manualHmacValid = expectedSignature === signatureParts.v1;
-
-console.log('MP WEBHOOK SIGNATURE VALID:', manualHmacValid);
-
-return manualHmacValid;
-
+    console.log('MP WEBHOOK SIGNATURE VALID: true');
+    return true;
   } catch (error) {
     if (error instanceof InvalidWebhookSignatureError) {
-      console.log('MP WEBHOOK SIGNATURE VALID:', false);
+      console.error('MP WEBHOOK SIGNATURE INVALID:', error.message);
       return false;
     }
 
-    console.error(
-      'MP WEBHOOK SIGNATURE ERROR:',
-      error?.message || error
-    );
-
+    console.error('MP WEBHOOK SIGNATURE ERROR:', error);
     return false;
   }
 }
