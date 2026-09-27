@@ -394,7 +394,7 @@ function hasValidMercadoPagoSignature(req, dataId) {
 
 const xSignature = req.get('x-signature') || '';
 const xRequestId = req.get('x-request-id') || '';
-const dataIdForSignature = String(req.query['data.id'] || '').trim();
+const dataIdForSignature = String(req.query['data.id'] || '').trim().toLowerCase();
 
 const signatureParts = Object.fromEntries(
   xSignature.split(',').map((part) => {
