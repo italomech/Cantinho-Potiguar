@@ -387,7 +387,7 @@ function hasValidMercadoPagoSignature(req) {
     WebhookSignatureValidator.validate({
       xSignature: req.get('x-signature'),
       xRequestId: req.get('x-request-id'),
-      dataId: req.query['data.id'],
+      dataId: String(req.query['data.id'] || '').toLowerCase(), 
       secret: mercadoPagoWebhookSecret
     });
 
