@@ -409,7 +409,14 @@ const expectedSignature = crypto
   .createHmac('sha256', mercadoPagoWebhookSecret)
   .update(manifest)
   .digest('hex');
-
+console.log('MP HMAC INPUT:', {
+  manifest,
+  expectedPrefix: expectedSignature.slice(0, 12),
+  receivedPrefix: signatureParts.v1?.slice(0, 12),
+  ts: signatureParts.ts,
+  requestId: xRequestId,
+  dataId: dataIdForSignature
+});
 console.log(
   'MP HMAC DEBUG:',
   'manualHmacValid=',
