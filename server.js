@@ -391,7 +391,7 @@ function hasValidMercadoPagoSignature(req, dataId) {
 
 const xSignature = req.get('x-signature') || '';
 const xRequestId = req.get('x-request-id') || '';
-const dataIdForSignature = String(req.query['data.id'] || '').trim().toLowerCase();
+const dataIdForSignature = String(req.query['data.id'] || '').trim();
 
 const signatureParts = Object.fromEntries(
   xSignature.split(',').map((part) => {
@@ -416,7 +416,7 @@ console.log(
     WebhookSignatureValidator.validate({
       xSignature: req.get('x-signature'),
       xRequestId: req.get('x-request-id'),
-      dataId: String(dataId || req.query['data.id'] || '').trim().toLowerCase(),
+      dataId: String(dataId || req.query['data.id'] || '').trim(),
       secret: mercadoPagoWebhookSecret,
     });
 
@@ -440,7 +440,7 @@ app.post('/api/webhooks/mercadopago', async (req, res) => {
   try {
     const eventType = String(req.body?.type || req.query.type || req.query.topic || '').toLowerCase();
     const action = String(req.body?.action || req.query.action || '').toLowerCase();
-    const dataId = String(req.query['data.id'] || req.body?.data?.id || req.body?.id || '').toLowerCase();
+    const dataId = String(req.query['data.id'] || req.body?.data?.id || req.body?.id || '').trim();
     if (!dataId) return res.sendStatus(400);
     if (!mercadoPagoWebhookSecret) {
       console.error('Mercado Pago: MERCADOPAGO_WEBHOOK_SECRET nao configurado.');
