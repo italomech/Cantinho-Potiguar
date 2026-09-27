@@ -380,12 +380,12 @@ app.get('/api/orders/:id/payment-status', async (req, res) => {
   }
 });
 
-function hasValidMercadoPagoSignature(req) {
+function hasValidMercadoPagoSignature(req, dataId) {
   if (!mercadoPagoWebhookSecret) return false;
 
   const xSignature = req.get('x-signature') || '';
   const xRequestId = req.get('x-request-id') || '';
-  const rawDataId = String(req.query['data.id'] || '');
+  const rawDataId = String(dataId || req.query['data.id'] || '');
   const dataId = rawDataId.toLowerCase();
 
   const signatureParts = {};
