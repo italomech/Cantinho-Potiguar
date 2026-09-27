@@ -383,11 +383,51 @@ app.get('/api/orders/:id/payment-status', async (req, res) => {
 function hasValidMercadoPagoSignature(req) {
   if (!mercadoPagoWebhookSecret) return false;
 
+  const xSignature = req.get('x-signature') || '';
+  const xRequestId = req.get('x-request-id') || '';
+  const rawDataId = String(req.query['data.id'] || '');
+  const dataId = rawDataId.toLowerCase();
+
+  const signatureParts = {};
+
+  for (const part of xSignature.split(',')) {
+    const [key, ...rest] = part.split('=');
+
+    if (key && rest.length) {
+      signatureParts[key.trim()] = rest.join('=').trim();
+    }
+  }
+
+  const ts = signatureParts.ts || '';
+  const v1 = signatureParts.v1 || '';
+
+  const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+
+  const expectedSignature = crypto
+    .createHmac('sha256', mercadoPagoWebhookSecret)
+    .update(manifest)
+    .digest('hex');
+
+  console.log('========== MP WEBHOOK DEBUG ==========');
+  console.log({
+    hasXSignature: Boolean(xSignature),
+    hasXRequestId: Boolean(xRequestId),
+    rawDataId,
+    dataId,
+    requestId: xRequestId,
+    ts,
+    v1Length: v1.length,
+    receivedPrefix: v1.slice(0, 8),
+    expectedPrefix: expectedSignature.slice(0, 8),
+    signaturesMatch: v1 === expectedSignature
+  });
+  console.log('======================================');
+
   try {
     WebhookSignatureValidator.validate({
-      xSignature: req.get('x-signature'),
-      xRequestId: req.get('x-request-id'),
-      dataId: String(req.query['data.id'] || '').toLowerCase(), 
+      xSignature,
+      xRequestId,
+      dataId,
       secret: mercadoPagoWebhookSecret
     });
 
