@@ -385,7 +385,7 @@ function hasValidMercadoPagoSignature(req, dataId) {
 
   const xSignature = req.get('x-signature') || '';
   const xRequestId = req.get('x-request-id') || '';
-  const rawDataId = String(dataId || req.query['data.id'] || '');
+  const normalizedDataId = rawDataId.toLowerCase();
   const dataId = rawDataId.toLowerCase();
 
   const signatureParts = {};
@@ -401,7 +401,7 @@ function hasValidMercadoPagoSignature(req, dataId) {
   const ts = signatureParts.ts || '';
   const v1 = signatureParts.v1 || '';
 
-  const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+  const manifest = `id:${normalizedDataId};request-id:${xRequestId};ts:${ts};`;
 
   const expectedSignature = crypto
     .createHmac('sha256', mercadoPagoWebhookSecret)
@@ -427,7 +427,7 @@ function hasValidMercadoPagoSignature(req, dataId) {
     WebhookSignatureValidator.validate({
       xSignature,
       xRequestId,
-      dataId,
+      dataId: normalizedDataId,
       secret: mercadoPagoWebhookSecret
     });
 
