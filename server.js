@@ -251,6 +251,8 @@ async function createPixOrder(order) {
     })
   });
   const responseBody = await response.json().catch(() => ({}));
+  console.log("MERCADO PAGO ERRORS:", JSON.stringify(responseBody.errors, null, 2));
+  console.log("MERCADO PAGO CAUSE:", JSON.stringify(responseBody.cause, null, 2));
   console.log('Mercado Pago resposta completa:', JSON.stringify(responseBody, null, 2));
 
 console.log(
