@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const expectedPixKey = '13075085456';
 
 function pixField(id, value) {
   return `${id}${String(value.length).padStart(2, '0')}${value}`;
@@ -70,8 +71,8 @@ const env = {
   MERCADOPAGO_ACCESS_TOKEN: '',
   MERCADOPAGO_ENV: 'test',
   PAYMENT_PAYER_EMAIL: '',
-  PIX_KEY: 'pix-key-integration-test',
-  PIX_QR_PAYLOAD: buildPixPayload('pix-key-integration-test'),
+  PIX_KEY: '',
+  PIX_QR_PAYLOAD: buildPixPayload(expectedPixKey),
   PORT: String(port),
   PUBLIC_URL: `http://127.0.0.1:${port}`,
   CORS_ORIGIN: `http://127.0.0.1:${port}`,
@@ -85,12 +86,12 @@ let uploadedProof;
 
 try {
   const prismaCli = path.join(root, 'node_modules', 'prisma', 'build', 'index.js');
-  const pushResult = spawnSync(process.execPath, [prismaCli, 'db', 'push', '--schema', 'prisma/schema.prisma', '--skip-generate'], {
+  const migrationResult = spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy', '--schema', 'prisma/schema.prisma'], {
     cwd: root,
     env,
     encoding: 'utf8'
   });
-  if (pushResult.status !== 0) throw new Error(`Temporary database setup failed: ${pushResult.error?.message || pushResult.stderr || pushResult.stdout}`);
+  if (migrationResult.status !== 0) throw new Error(`Temporary database migration failed: ${migrationResult.error?.message || migrationResult.stderr || migrationResult.stdout}`);
 
   process.env.DATABASE_URL = databaseUrl;
   const { PrismaClient } = await import('@prisma/client');
@@ -118,13 +119,16 @@ try {
   assert.equal(settingsResponse.status, 200);
   assert.equal(settings.pix.configured, true);
   assert.equal(settings.pix.qrConfigured, true);
-  assert.equal(settings.pix.pixKey, env.PIX_KEY);
+  assert.equal(settings.pix.pixKey, expectedPixKey);
   assert.match(settings.pix.qrCodeDataUrl, /^data:image\/png;base64,/);
 
   const orderData = {
     customerName: 'Cliente Pix teste',
     phone: '84999999999',
-    deliveryMethod: 'PICKUP',
+    deliveryMethod: 'DELIVERY',
+    address: 'Rua do Teste',
+    addressNumber: '15',
+    neighborhood: 'Upanema',
     paymentMethod: 'PIX',
     items: [{ productId: product.id, quantity: 2 }]
   };
@@ -142,9 +146,15 @@ try {
   const orderResult = await orderResponse.json();
   assert.equal(orderResponse.status, 201, JSON.stringify(orderResult));
   assert.equal(orderResult.payment.type, 'PIX');
-  assert.equal(orderResult.payment.pixKey, env.PIX_KEY);
+  assert.equal(orderResult.payment.pixKey, expectedPixKey);
   assert.equal(orderResult.order.paymentId, null, 'manual Pix does not create a Mercado Pago payment');
-  assert.equal(orderResult.order.total, 50, 'the backend calculates prices from the database');
+  assert.equal(orderResult.order.items.length, 1, 'the selected product is saved and returned');
+  assert.equal(orderResult.order.items[0].productId, product.id);
+  assert.equal(orderResult.order.items[0].productName, product.name);
+  assert.equal(orderResult.order.items[0].quantity, 2);
+  assert.equal(orderResult.order.subtotal, 50, 'the backend calculates the product subtotal from the database');
+  assert.equal(orderResult.order.deliveryFee, 5, 'the backend calculates the delivery fee from the selected neighborhood');
+  assert.equal(orderResult.order.total, 55, 'subtotal plus delivery equals the stored total');
 
   assert.equal(orderResult.order.pixProofStatus, 'SENT', 'proof is saved with the order');
   uploadedProof = path.join(root, 'uploads', path.basename(orderResult.order.pixProofUrl));

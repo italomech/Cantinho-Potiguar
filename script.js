@@ -38,13 +38,9 @@ async function apiFetch(path, options) {
 document.getElementById('year').textContent = new Date().getFullYear();
 
 async function loadCatalog() {
-	const [productsResponse, settingsResponse] = await Promise.all([apiFetch('/api/products'), apiFetch('/api/settings')]);
-	if (!productsResponse.ok || !settingsResponse.ok) throw new Error('Não foi possível carregar o cardápio.');
+	const productsResponse = await apiFetch('/api/products');
+	if (!productsResponse.ok) throw new Error('Não foi possível carregar o cardápio.');
 	state.products = (await productsResponse.json()).map(product => ({ ...product, id: String(product.id), price: parsePrice(product.price ?? Number(product.priceCents) / 100) }));
-	const settings = await settingsResponse.json();
-	state.deliveryFee = settings.deliveryFee;
-	state.pixPayment = settings.pix;
-	renderPixPayment();
 	const aliases = { 'creme-de-frango': 'Creme de Frango', panqueca: 'Panqueca', strogonoff: 'Strogonoff', lasanha: 'Lasanha', 'escondidinho-de-carne': 'Escondidinho de Carne' };
 	for (const [slug, name] of Object.entries(aliases)) {
 		const product = state.products.find(item => item.name === name);
@@ -55,6 +51,23 @@ async function loadCatalog() {
 			card.querySelector('.menu-header span').textContent = money(product.price);
 			card.querySelector('.add-to-cart').dataset.productId = product.id;
 		}
+	}
+}
+
+async function loadPixSettings() {
+	try {
+		const response = await apiFetch('/api/settings');
+		if (!response.ok) throw new Error('Não foi possível carregar os dados do Pix.');
+		const settings = await response.json();
+		state.deliveryFee = settings.deliveryFee;
+		state.pixPayment = settings.pix;
+		renderPixPayment();
+		renderCart();
+	} catch (error) {
+		state.pixPayment = null;
+		renderPixPayment();
+		$('[data-pix-config-message]').textContent = 'Não foi possível carregar os dados do Pix. Atualize a página ou tente novamente.';
+		$('[data-form-message]').textContent = error.message;
 	}
 }
 
@@ -346,3 +359,4 @@ document.addEventListener('click', async event => {
 });
 
 loadCatalog().then(renderCart).catch(error => { $('[data-form-message]').textContent = error.message; });
+loadPixSettings();

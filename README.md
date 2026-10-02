@@ -23,7 +23,7 @@ Requisito: Node.js 20 LTS ou superior.
 Copy-Item .env.example .env
 npm install
 npm run prisma:generate
-npm run db:push
+npm run db:migrate
 npm run db:seed
 npm run dev
 ```
@@ -43,7 +43,7 @@ O site precisa ser aberto pelo Express em `http://localhost:3000`. Nao abra `ind
 - `CORS_ORIGIN`: origem permitida pelo CORS.
 - `JWT_SECRET`: segredo longo e aleatorio para as sessoes administrativas.
 - `ADMIN_EMAIL`, `ADMIN_PASSWORD`: credenciais iniciais do painel.
-- `PIX_KEY`: chave Pix real que sera exibida no checkout. Configure-a no `.env` local e no ambiente do servidor.
+- `PIX_KEY`: opcional; sobrescreve a chave Pix padrão centralizada no backend. Configure esta variável quando quiser usar outra chave em um ambiente.
 - `PIX_QR_PAYLOAD`: opcional; payload Pix copia e cola/BR Code real fornecido pelo banco ou PSP. O sistema exibe o QR apenas se o payload for valido e contiver exatamente a chave de `PIX_KEY`. Nao e a chave e nao deve ser inventado.
 - `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_ENV`, `MERCADOPAGO_WEBHOOK_SECRET`: nao sao necessarios para o checkout Pix manual; permanecem apenas para rotas legadas.
 - `DELIVERY_FEE_CENTS`: taxa inicial de entrega em centavos.
@@ -60,8 +60,8 @@ O backend consulta produtos, precos e taxa no banco; nunca aceita o total enviad
 - Use um servidor Node (Render, Railway, Fly.io, VPS ou equivalente) com HTTPS.
 - Para mais de uma instancia, use PostgreSQL em vez de SQLite e configure backup.
 - Configure as variaveis de ambiente no provedor; nao envie `.env` ao repositorio.
-- Execute `npm install`, `npm run prisma:generate`, `npm run db:push` e `npm run db:seed` no deploy inicial.
-- Configure dominio, HTTPS, `PUBLIC_URL` e CORS. No Render, configure `PIX_KEY`; configure `PIX_QR_PAYLOAD` apenas quando tiver o BR Code real correspondente a essa mesma chave.
+- Execute `npm install`, `npm run prisma:generate`, `npm run db:migrate` e `npm run db:seed` no deploy inicial. `migrate deploy` aplica todas as migrações novas sem recriar o banco.
+- Configure dominio, HTTPS, `PUBLIC_URL` e CORS. A chave Pix padrão está no backend; configure `PIX_KEY` no Render apenas se precisar sobrescrevê-la. Configure `PIX_QR_PAYLOAD` somente quando tiver o BR Code real correspondente a essa mesma chave.
 - Para manter comprovantes entre deploys, monte um Persistent Disk no Render e defina `UPLOADS_DIR` para uma pasta dentro do ponto de montagem.
 - Configure logs, backups, alertas e rotacao das credenciais.
 

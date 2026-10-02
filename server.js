@@ -28,6 +28,7 @@ const prisma = new PrismaClient();
 const port = Number(process.env.PORT || 3000);
 const jwtSecret = process.env.JWT_SECRET;
 const publicUrl = process.env.PUBLIC_URL || 'https://cantinho-potiguar.onrender.com';
+const defaultPixKey = '13075085456';
 const mercadoPagoMode = process.env.MERCADOPAGO_ENV === 'production' ? 'production' : 'test';
 const mercadoPagoAccessToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
 const mercadoPagoWebhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim();
@@ -160,7 +161,7 @@ function orderPayload(order) {
   return { ...order, subtotal: money(order.subtotalCents), deliveryFee: money(order.deliveryFeeCents), total: money(order.totalCents) };
 }
 async function manualPixPayment() {
-  const pixKey = process.env.PIX_KEY?.trim();
+  const pixKey = process.env.PIX_KEY?.trim() || defaultPixKey;
   const pixPayload = process.env.PIX_QR_PAYLOAD?.trim();
   if (!pixKey) return { configured: false, qrConfigured: false };
   let qrCodeDataUrl = null;
