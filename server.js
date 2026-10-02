@@ -5,8 +5,11 @@ import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import multer from 'multer';
+import QRCode from 'qrcode';
 import {
   MercadoPagoConfig,
   Payment,
@@ -16,9 +19,10 @@ import {
 } from 'mercadopago';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
-import { getWhatsAppConfig, sendOrderToWhatsApp } from './whatsapp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadDir = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.join(__dirname, 'uploads');
+fs.mkdirSync(uploadDir, { recursive: true });
 const app = express();
 const prisma = new PrismaClient();
 const port = Number(process.env.PORT || 3000);
@@ -26,7 +30,6 @@ const jwtSecret = process.env.JWT_SECRET;
 const publicUrl = process.env.PUBLIC_URL || 'https://cantinho-potiguar.onrender.com';
 const mercadoPagoMode = process.env.MERCADOPAGO_ENV === 'production' ? 'production' : 'test';
 const mercadoPagoAccessToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
-const paymentPayerEmail = process.env.PAYMENT_PAYER_EMAIL?.trim();
 const mercadoPagoWebhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim();
 const mercadoPagoWebhookUrl = `${publicUrl}/api/webhooks/mercadopago`;
 const hasMercadoPagoToken = Boolean(mercadoPagoAccessToken && !/COLOQUE|SEU_TOKEN|YOUR_TOKEN/i.test(mercadoPagoAccessToken));
@@ -36,20 +39,33 @@ const mercadoPago = hasMercadoPagoToken
 const paymentApi = mercadoPago ? new Payment(mercadoPago) : null;
 const preferenceApi = mercadoPago ? new Preference(mercadoPago) : null;
 const mercadoPagoApiUrl = 'https://api.mercadopago.com';
-const whatsappConfig = getWhatsAppConfig();
 
 if (!jwtSecret) console.warn('JWT_SECRET nao configurado. A autenticacao administrativa nao pode iniciar com seguranca.');
 console.log('MERCADOPAGO_ACCESS_TOKEN configurado:', hasMercadoPagoToken);
 console.log('MERCADOPAGO_ENV:', mercadoPagoMode);
 console.log('MERCADOPAGO_WEBHOOK_URL:', mercadoPagoWebhookUrl);
-if (!whatsappConfig.accessToken || !whatsappConfig.phoneNumberId || !whatsappConfig.graphApiVersion || !whatsappConfig.templateName || !whatsappConfig.destination) {
-  console.warn('WhatsApp Cloud API nao configurada. O pagamento continuara funcionando, mas pedidos aprovados nao serao enviados.');
-}
-
 app.use(cors({ origin: process.env.CORS_ORIGIN || publicUrl, credentials: true }));
 
+app.use('/uploads', express.static(uploadDir));
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
+
+const proofUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, uploadDir),
+    filename: (_req, file, callback) => {
+      const safeName = `${Date.now()}-${crypto.randomUUID()}`;
+      callback(null, safeName);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'];
+    if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(path.extname(file.originalname || '').toLowerCase())) return callback(null, true);
+    callback(new Error('Arquivo não aceito. Envie JPG, JPEG, PNG, WEBP ou PDF.'));
+  }
+});
 
 const customerSchema = z.object({
   customerName: z.string().trim().min(2).max(100),
@@ -60,14 +76,21 @@ const customerSchema = z.object({
   complement: z.string().trim().max(100).optional().default(''),
   neighborhood: z.string().trim().max(100).optional().default(''),
   reference: z.string().trim().max(150).optional().default(''),
-  paymentMethod: z.enum(['PIX', 'CARD']),
+  paymentMethod: z.enum(['PIX', 'CARD', 'CASH']),
   items: z.array(z.object({ productId: z.string().min(1), quantity: z.number().int().min(1).max(30) })).min(1).max(30)
 });
 const statusSchema = z.object({ status: z.enum(['RECEIVED', 'PAYMENT_PENDING', 'PAID', 'PREPARING', 'OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED']) });
+const cashOpeningDescription = 'Abertura do caixa';
 const productSchema = z.object({
   name: z.string().trim().min(2).max(100), description: z.string().trim().max(500), imageUrl: z.string().url(),
-  priceCents: z.number().int().min(1).max(100000), active: z.boolean().optional().default(true)
+  priceCents: z.number().int().min(1).max(100000), costCents: z.number().int().min(0).max(100000).optional(), active: z.boolean().optional().default(true)
 });
+const cashMovementSchema = z.object({
+  type: z.enum(['ENTRY', 'OUTPUT']),
+  amountCents: z.number().int().positive().max(100000000),
+  description: z.string().trim().min(2).max(200).refine(description => description !== cashOpeningDescription, 'Descrição reservada para abertura do caixa.')
+});
+const cashClosureSchema = z.object({ cashCents: z.number().int().min(0).max(100000000) });
 
 function signToken(admin) {
   return jwt.sign({ sub: admin.id, email: admin.email }, jwtSecret, { expiresIn: '8h' });
@@ -81,8 +104,80 @@ function requireAdmin(req, res, next) {
   } catch { res.status(401).json({ error: 'Sessao expirada.' }); }
 }
 function money(cents) { return Number((cents / 100).toFixed(2)); }
+function centsFromMoney(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value * 100);
+  if (typeof value === 'string') {
+    const normalized = value.replace(/[R$\s.]/g, '').replace(',', '.');
+    const numeric = Number(normalized);
+    return Number.isFinite(numeric) ? Math.round(numeric * 100) : 0;
+  }
+  return 0;
+}
+function readPixTlvFields(value) {
+  const fields = new Map();
+  const bytes = Buffer.from(value, 'utf8');
+  let offset = 0;
+  while (offset < bytes.length) {
+    const header = bytes.toString('ascii', offset, offset + 4);
+    if (!/^\d{4}$/.test(header)) return null;
+    const id = header.slice(0, 2);
+    const length = Number(header.slice(2));
+    offset += 4;
+    if (offset + length > bytes.length) return null;
+    fields.set(id, bytes.toString('utf8', offset, offset + length));
+    offset += length;
+  }
+  return fields;
+}
+function pixCrc16(value) {
+  let crc = 0xffff;
+  for (const byte of value) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit += 1) crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+    crc &= 0xffff;
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+function hasValidPixCrc(payload) {
+  const bytes = Buffer.from(payload, 'utf8');
+  if (bytes.length < 8 || bytes.toString('ascii', bytes.length - 8, bytes.length - 4) !== '6304') return false;
+  const checksum = bytes.toString('ascii', bytes.length - 4);
+  return /^[\da-f]{4}$/i.test(checksum) && pixCrc16(bytes.subarray(0, bytes.length - 4)) === checksum.toUpperCase();
+}
+function pixKeyFromPayload(payload) {
+  if (!hasValidPixCrc(payload)) return null;
+  const fields = readPixTlvFields(payload);
+  if (!fields) return null;
+  for (const [id, value] of fields) {
+    const tag = Number(id);
+    if (tag < 26 || tag > 51) continue;
+    const accountInfo = readPixTlvFields(value);
+    if (accountInfo?.get('00') === 'BR.GOV.BCB.PIX') return accountInfo.get('01') || null;
+  }
+  return null;
+}
 function orderPayload(order) {
   return { ...order, subtotal: money(order.subtotalCents), deliveryFee: money(order.deliveryFeeCents), total: money(order.totalCents) };
+}
+async function manualPixPayment() {
+  const pixKey = process.env.PIX_KEY?.trim();
+  const pixPayload = process.env.PIX_QR_PAYLOAD?.trim();
+  if (!pixKey) return { configured: false, qrConfigured: false };
+  let qrCodeDataUrl = null;
+  if (pixPayload && pixKeyFromPayload(pixPayload) === pixKey) {
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(pixPayload, { errorCorrectionLevel: 'M', margin: 1, width: 240 });
+    } catch {
+      console.warn('PIX_QR_PAYLOAD não pôde ser convertido em QR Code.');
+    }
+  }
+  return {
+    configured: true,
+    type: 'PIX',
+    pixKey,
+    qrConfigured: Boolean(qrCodeDataUrl),
+    qrCodeDataUrl
+  };
 }
 function normalizeNeighborhood(value) {
   return String(value || '').trim().toLocaleLowerCase('pt-BR');
@@ -112,6 +207,149 @@ function paymentStatusFromGateway(status) {
   }
   return { paymentStatus: 'PENDING', orderStatus: 'PAYMENT_PENDING' };
 }
+function parseLocalDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return date.getFullYear() === Number(match[1]) && date.getMonth() === Number(match[2]) - 1 && date.getDate() === Number(match[3]) ? date : null;
+}
+function getDateWindow(period = 'today', customStart = null, customEnd = null) {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+
+  if (period === 'yesterday') {
+    const yesterday = new Date(startOfDay);
+    yesterday.setDate(yesterday.getDate() - 1);
+    return { from: new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate()), to: new Date(startOfDay) };
+  }
+  if (period === 'last7') {
+    const from = new Date(startOfDay);
+    from.setDate(from.getDate() - 6);
+    return { from, to: endOfDay };
+  }
+  if (period === 'month') {
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 1) };
+  }
+  if (period === 'custom' && customStart && customEnd) {
+    const from = parseLocalDate(customStart);
+    const end = parseLocalDate(customEnd);
+    if (!from || !end || from > end) throw new Error('Período personalizado inválido.');
+    const to = new Date(end);
+    to.setDate(to.getDate() + 1);
+    return { from, to };
+  }
+  return { from: startOfDay, to: endOfDay };
+}
+async function getCashSummary(period = 'today', customStart = null, customEnd = null) {
+  const window = getDateWindow(period, customStart, customEnd);
+  const [allOrders, movementEntries, movementOutputs, lastClosure] = await Promise.all([
+    prisma.order.findMany({ where: { createdAt: { gte: window.from, lt: window.to } }, include: { items: true } }),
+    prisma.cashMovement.findMany({ where: { createdAt: { gte: window.from, lt: window.to }, type: 'ENTRY' } }),
+    prisma.cashMovement.findMany({ where: { createdAt: { gte: window.from, lt: window.to }, type: 'OUTPUT' } }),
+    prisma.cashClosure.findFirst({ where: { closedAt: { lt: window.from } }, orderBy: { closedAt: 'desc' } })
+  ]);
+
+  const validOrdersById = new Map(allOrders
+    .filter(order => order.paymentStatus === 'APPROVED' && order.orderStatus !== 'CANCELLED')
+    .map(order => [order.id, order]));
+  const approvedOrders = [...validOrdersById.values()];
+  const openingMovementEntries = movementEntries
+    .filter(entry => entry.description === cashOpeningDescription)
+    .sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
+  const operationalEntries = movementEntries.filter(entry => entry.description !== cashOpeningDescription);
+  const operationalOutputs = movementOutputs.filter(entry => entry.description !== cashOpeningDescription);
+
+  const productCosts = await prisma.product.findMany({
+    where: { id: { in: [...new Set(approvedOrders.flatMap(order => order.items.map(item => item.productId)))] } }
+  });
+
+  const totalSold = approvedOrders.reduce((sum, order) => sum + order.totalCents, 0);
+  const totalReceived = totalSold;
+  const cashSales = approvedOrders.filter(order => order.paymentMethod === 'CASH').reduce((sum, order) => sum + order.totalCents, 0);
+  const pix = approvedOrders.filter(order => order.paymentMethod === 'PIX').reduce((sum, order) => sum + order.totalCents, 0);
+  const card = approvedOrders.filter(order => order.paymentMethod === 'CARD').reduce((sum, order) => sum + order.totalCents, 0);
+  const manualEntries = operationalEntries.reduce((sum, entry) => sum + entry.amountCents, 0);
+  const manualOutputs = operationalOutputs.reduce((sum, entry) => sum + entry.amountCents, 0);
+  const feesByOrder = new Map(approvedOrders.map(order => [
+    order.id,
+    order.paymentMethod === 'CASH' ? 0 : Number(order.feeCents) > 0 ? Number(order.feeCents) : null
+  ]));
+  const fees = approvedOrders.reduce((sum, order) => sum + (feesByOrder.get(order.id) || 0), 0);
+  const feesUnavailableOrdersCount = approvedOrders.filter(order => feesByOrder.get(order.id) === null).length;
+  const costById = new Map(productCosts.map(product => [product.id, product.costCents == null ? null : Number(product.costCents)]));
+  let costOfGoodsSold = 0;
+  let costUnavailableItemsCount = 0;
+  const sales = approvedOrders.map(order => {
+    let orderCostCents = 0;
+    let orderCostComplete = true;
+    for (const item of order.items) {
+      const unitCost = costById.get(item.productId);
+      if (unitCost == null) {
+        orderCostComplete = false;
+        costUnavailableItemsCount += Number(item.quantity);
+      } else {
+        orderCostCents += unitCost * Number(item.quantity);
+      }
+    }
+    costOfGoodsSold += orderCostCents;
+    const feeCents = feesByOrder.get(order.id);
+    return {
+      date: order.createdAt,
+      kind: 'sale',
+      pedido: order.id,
+      cliente: order.customerName,
+      formaPagamento: order.paymentMethod,
+      valor: order.totalCents,
+      taxa: feeCents,
+      taxaDisponivel: feeCents !== null,
+      custo: orderCostComplete ? orderCostCents : null,
+      custoDisponivel: orderCostComplete,
+      lucro: order.totalCents - orderCostCents - (feeCents || 0),
+      lucroParcial: !orderCostComplete || feeCents === null,
+      status: order.paymentStatus
+    };
+  });
+  const profitCents = totalSold - costOfGoodsSold - fees;
+  const profitIsPartial = costUnavailableItemsCount > 0 || feesUnavailableOrdersCount > 0;
+  const openingBalanceCents = openingMovementEntries.length
+    ? openingMovementEntries[0].amountCents
+    : lastClosure?.closingBalanceCents || 0;
+  const expectedCashCents = openingBalanceCents + cashSales + manualEntries - manualOutputs;
+  const movements = [...openingMovementEntries, ...operationalEntries, ...operationalOutputs]
+    .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
+
+  return {
+    period,
+    from: window.from,
+    to: window.to,
+    ordersCount: allOrders.length,
+    approvedOrdersCount: approvedOrders.length,
+    pendingOrdersCount: allOrders.filter(order => order.paymentStatus === 'PENDING' || order.orderStatus === 'PAYMENT_PENDING').length,
+    cancelledOrdersCount: allOrders.filter(order => order.paymentStatus === 'REJECTED' || order.paymentStatus === 'CANCELLED' || order.orderStatus === 'CANCELLED').length,
+    openingBalanceCents,
+    totalSoldCents: totalSold,
+    totalReceivedCents: totalReceived,
+    cashSalesCents: cashSales,
+    cashCents: cashSales,
+    pixCents: pix,
+    cardCents: card,
+    feesCents: fees,
+    feesUnavailableOrdersCount,
+    manualEntriesCents: manualEntries,
+    manualOutputsCents: manualOutputs,
+    expensesCents: manualOutputs,
+    expectedCashCents,
+    closingBalanceCents: expectedCashCents,
+    profitCents,
+    profitIsPartial,
+    costOfGoodsCents: costOfGoodsSold,
+    costUnavailableItemsCount,
+    orders: approvedOrders,
+    sales,
+    movements: movements.map(item => ({ ...item, type: item.description === cashOpeningDescription ? 'OPENING' : item.type }))
+  };
+}
 function isStalePaymentStatus(order, nextStatus) {
   return order.paymentStatus !== 'PENDING' && nextStatus.paymentStatus === 'PENDING';
 }
@@ -131,12 +369,10 @@ async function syncPayment(paymentId) {
     return order;
   }
   if (order.paymentId === String(payment.id) && order.paymentStatus === status.paymentStatus && order.orderStatus === status.orderStatus) {
-    if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(order.id);
     return order;
   }
   const updatedOrder = await prisma.order.update({ where: { id: order.id }, data: { paymentId: String(payment.id), ...status } });
   console.log('Mercado Pago: pagamento sincronizado:', String(payment.id), 'pedido:', order.id, 'status:', payment.status || 'unknown');
-  if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(updatedOrder.id);
   return updatedOrder;
 }
 
@@ -191,88 +427,15 @@ async function syncOrderFromMercadoPago(orderId) {
     return localOrder;
   }
   if (localOrder.paymentId === String(payment?.id || orderId) && localOrder.paymentStatus === status.paymentStatus && localOrder.orderStatus === status.orderStatus) {
-    if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(localOrder.id);
     return localOrder;
   }
   const updatedOrder = await prisma.order.update({ where: { id: localOrder.id }, data: { paymentId: String(payment?.id || orderId), ...status } });
   console.log('Mercado Pago: order sincronizada:', String(orderId), 'pedido:', localOrder.id, 'status:', mercadoPagoOrder.status || 'unknown');
-  if (status.paymentStatus === 'APPROVED') await sendPaidOrderToWhatsApp(updatedOrder.id);
   return updatedOrder;
 }
 function safeMercadoPagoError(error) {
   return { name: error?.name, message: error?.message, status: error?.status, code: error?.code, mercadoPagoStatus: error?.mercadoPagoStatus, mercadoPagoMessage: error?.mercadoPagoMessage };
 }
-async function sendPaidOrderToWhatsApp(orderId) {
-  const order = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!order || order.paymentStatus !== 'APPROVED' || order.orderStatus !== 'PAID') return;
-  const claim = await prisma.order.updateMany({
-    where: { id: orderId, paymentStatus: 'APPROVED', orderStatus: 'PAID', whatsappSentAt: null, whatsappSendingAt: null },
-    data: { whatsappSendingAt: new Date() }
-  });
-  if (!claim.count) return;
-  try {
-    const completeOrder = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
-    const result = await sendOrderToWhatsApp(completeOrder);
-    await prisma.order.update({ where: { id: orderId }, data: { whatsappSendingAt: null, whatsappSentAt: new Date(), whatsappMessageId: result.messageId } });
-    console.log('WhatsApp: pedido enviado:', orderId);
-  } catch (error) {
-    await prisma.order.updateMany({ where: { id: orderId, whatsappSendingAt: { not: null }, whatsappSentAt: null }, data: { whatsappSendingAt: null } });
-    console.error('WhatsApp: erro ao enviar pedido:', error.status || 'unknown', error.message);
-  }
-}
-async function createPixOrder(order) {
-  if (!mercadoPagoAccessToken || !hasMercadoPagoToken) throw new Error('Mercado Pago nao configurado.');
-  if (!paymentPayerEmail) throw new Error('PAYMENT_PAYER_EMAIL nao configurado.');
-  if (mercadoPagoMode === 'test' && !/@testuser\.com$/i.test(paymentPayerEmail)) {
-    throw new Error('No ambiente de teste, PAYMENT_PAYER_EMAIL deve ser de um usuario de teste do Mercado Pago.');
-  }
-  const response = await fetch(`${mercadoPagoApiUrl}/v1/orders`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${mercadoPagoAccessToken}`,
-      'Content-Type': 'application/json',
-      'X-Idempotency-Key': crypto.randomUUID()
-    },
-    body: JSON.stringify({
-      type: 'online',
-      processing_mode: 'automatic',
-      total_amount: money(order.totalCents).toFixed(2),
-      external_reference: order.id,
-      payer: {
-  email: paymentPayerEmail,
-  ...(mercadoPagoMode === 'test' ? { first_name: 'APRO' } : {})
-},
-      transactions: {
-        payments: [{
-          amount: money(order.totalCents).toFixed(2),
-          payment_method: { id: 'pix', type: 'bank_transfer' }
-        }]
-      }
-    })
-  });
-  const responseBody = await response.json().catch(() => ({}));
-  console.log("MERCADO PAGO ERRORS:", JSON.stringify(responseBody.errors, null, 2));
-  console.log("MERCADO PAGO CAUSE:", JSON.stringify(responseBody.cause, null, 2));
-  console.log('Mercado Pago resposta completa:', JSON.stringify(responseBody, null, 2));
-
-console.log(
-  'Mercado Pago: Order criada pelo SITE:',
-  responseBody.id,
-  'external_reference:',
-  responseBody.external_reference
-);
-
-  if (!response.ok) {
-    const error = new Error('Mercado Pago recusou a criacao do pagamento.');
-    error.status = response.status;
-    error.code = responseBody.error || responseBody.cause?.[0]?.code;
-    error.mercadoPagoStatus = response.status;
-    error.mercadoPagoMessage = responseBody.message || responseBody.error || responseBody.cause?.[0]?.description || 'Resposta invalida da API.';
-    throw error;
-  }
-  return responseBody;
-}
-
 async function createCheckoutPreference(order) {
   if (!preferenceApi) throw new Error('Mercado Pago nao configurado.');
   const items = order.items.map(item => ({
@@ -302,46 +465,150 @@ app.get('/api/products', async (_req, res) => {
 });
 app.get('/api/settings', async (_req, res) => {
   const setting = await prisma.setting.findUnique({ where: { id: 'main' } });
-  res.json({ deliveryFee: money(setting?.deliveryFeeCents || 0) });
+  const pix = await manualPixPayment();
+  res.json({ deliveryFee: money(setting?.deliveryFeeCents || 0), pix });
 });
 
-app.post('/api/orders', async (req, res) => {
-  const parsed = customerSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Confira os dados do pedido.', details: parsed.error.flatten() });
+function handleProofUpload(req, res, next) {
+  proofUpload.single('proof')(req, res, error => {
+    if (!error) return next();
+    if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'O comprovante deve ter no máximo 10 MB.' });
+    console.error('Upload do comprovante:', error);
+    return res.status(400).json({ error: 'Arquivo não aceito. Envie JPG, JPEG, PNG, WEBP ou PDF.' });
+  });
+}
+
+function identifyProofType(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return { mime: 'image/jpeg', extension: '.jpg' };
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', extension: '.png' };
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return { mime: 'image/webp', extension: '.webp' };
+  if (buffer.toString('ascii', 0, 5) === '%PDF-') return { mime: 'application/pdf', extension: '.pdf' };
+  return null;
+}
+
+app.post('/api/orders/:id/proof', handleProofUpload, async (req, res) => {
+  let proofPath = req.file?.path;
+  try {
+    const order = await prisma.order.findUnique({ where: { id: req.params.id } });
+    if (!order) {
+      if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+      return res.status(404).json({ error: 'Pedido nao encontrado.' });
+    }
+    if (order.paymentMethod !== 'PIX') {
+      if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+      return res.status(400).json({ error: 'O comprovante só pode ser anexado a pedidos Pix.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'Selecione um comprovante válido.' });
+    const proofType = identifyProofType(await fs.promises.readFile(proofPath));
+    if (!proofType) {
+      await fs.promises.unlink(proofPath).catch(() => {});
+      return res.status(400).json({ error: 'Arquivo inválido. Envie JPG, JPEG, PNG, WEBP ou PDF.' });
+    }
+    const safeFilename = `${req.file.filename}${proofType.extension}`;
+    const safeProofPath = path.join(uploadDir, safeFilename);
+    await fs.promises.rename(proofPath, safeProofPath);
+    proofPath = safeProofPath;
+    const proofUrl = `/uploads/${safeFilename}`;
+    const updatedOrder = await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        pixProofUrl: proofUrl,
+        pixProofMime: proofType.mime,
+        pixProofStatus: 'SENT',
+        pixProofUploadedAt: new Date()
+      }
+    });
+    res.json({ orderId: updatedOrder.id, proofUrl, proofStatus: 'SENT' });
+  } catch (error) {
+    if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+    console.error('Upload do comprovante:', error);
+    res.status(500).json({ error: 'Não foi possível salvar o comprovante.' });
+  }
+});
+
+app.post('/api/orders', handleProofUpload, async (req, res) => {
+  let proofPath = req.file?.path;
+  const body = { ...req.body };
+  if (typeof body.items === 'string') {
+    try { body.items = JSON.parse(body.items); }
+    catch { body.items = null; }
+  }
+  const parsed = customerSchema.safeParse(body);
+  if (!parsed.success) {
+    if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+    return res.status(400).json({ error: 'Confira os dados do pedido.', details: parsed.error.flatten() });
+  }
   try {
     const input = parsed.data;
-    if (!input.items.length) return res.status(400).json({ error: 'Adicione ao menos um item ao pedido.' });
+    if (!input.items.length) {
+      if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+      return res.status(400).json({ error: 'Adicione ao menos um item ao pedido.' });
+    }
     if (input.deliveryMethod === 'DELIVERY' && (!input.address || !input.addressNumber || !input.neighborhood)) {
+      if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+      proofPath = null;
       return res.status(400).json({ error: 'Informe o endereco completo para entrega.' });
     }
+    let pixPayment = null;
+    let proofType = null;
+    if (input.paymentMethod === 'PIX') {
+      if (!req.file) return res.status(400).json({ error: 'Selecione o comprovante Pix antes de enviar o pedido.' });
+      proofType = identifyProofType(await fs.promises.readFile(proofPath));
+      if (!proofType) {
+        await fs.promises.unlink(proofPath).catch(() => {});
+        proofPath = null;
+        return res.status(400).json({ error: 'Arquivo inválido. Envie JPG, JPEG, PNG, WEBP ou PDF.' });
+      }
+      pixPayment = await manualPixPayment();
+      if (!pixPayment.configured) {
+        if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+        proofPath = null;
+        return res.status(503).json({ error: 'Pagamento Pix ainda não configurado. Informe PIX_KEY e PIX_QR_PAYLOAD no ambiente do servidor.' });
+      }
+    } else if (req.file) {
+      await fs.promises.unlink(proofPath).catch(() => {});
+      proofPath = null;
+      return res.status(400).json({ error: 'O comprovante só pode ser enviado com pagamento Pix.' });
+    }
     const calculated = await calculateOrder(input);
+    let pixProofUrl = null;
+    if (proofType) {
+      const safeFilename = `${req.file.filename}${proofType.extension}`;
+      const safeProofPath = path.join(uploadDir, safeFilename);
+      await fs.promises.rename(proofPath, safeProofPath);
+      proofPath = safeProofPath;
+      pixProofUrl = `/uploads/${safeFilename}`;
+    }
     const order = await prisma.order.create({ data: {
       customerName: input.customerName, phone: input.phone, deliveryMethod: input.deliveryMethod,
       address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,
       neighborhood: input.neighborhood || null, reference: input.reference || null, paymentMethod: input.paymentMethod,
       subtotalCents: calculated.subtotalCents, deliveryFeeCents: calculated.deliveryFeeCents, totalCents: calculated.totalCents,
+      ...(input.paymentMethod === 'PIX' ? { orderStatus: 'PAYMENT_PENDING' } : {}),
+      ...(proofType ? { pixProofUrl, pixProofMime: proofType.mime, pixProofStatus: 'SENT', pixProofUploadedAt: new Date() } : {}),
       items: { create: calculated.items }
     }, include: { items: true } });
+    proofPath = null;
+
+    if (input.paymentMethod === 'PIX') {
+      return res.status(201).json({ order: orderPayload(order), payment: { ...pixPayment, status: 'PENDING' } });
+    }
+
+    if (input.paymentMethod === 'CASH') {
+      return res.status(201).json({ order: orderPayload(order), payment: { configured: true, type: 'CASH' } });
+    }
 
     if (!mercadoPagoAccessToken || !hasMercadoPagoToken) return res.status(503).json({ error: 'Mercado Pago nao configurado no servidor.' });
-    let payment;
-    if (input.paymentMethod === 'PIX') {
-      const mercadoPagoOrder = await createPixOrder(order);
-      const payment = paymentFromOrderResponse(mercadoPagoOrder);
-      const paymentMethod = payment?.payment_method || {};
-      if (!mercadoPagoOrder.id || !payment?.id || !paymentMethod.qr_code || !paymentMethod.qr_code_base64) {
-        const error = new Error('Mercado Pago nao retornou os dados Pix esperados.');
-        error.status = 502;
-        throw error;
-      }
-      const savedOrder = await prisma.order.update({ where: { id: order.id }, data: { paymentId: String(payment.id), preferenceId: String(mercadoPagoOrder.id), orderStatus: 'PAYMENT_PENDING' } });
-      return res.status(201).json({ order: orderPayload(savedOrder), payment: { configured: true, type: 'PIX', status: payment.status || mercadoPagoOrder.status || 'action_required', order_id: String(mercadoPagoOrder.id), payment_id: String(payment.id), qr_code: paymentMethod.qr_code, qr_code_base64: paymentMethod.qr_code_base64, ticket_url: paymentMethod.ticket_url, amount: money(order.totalCents) } });
-    }
-    payment = await createCheckoutPreference(order);
+    const payment = await createCheckoutPreference(order);
     const savedOrder = await prisma.order.update({ where: { id: order.id }, data: { preferenceId: payment.id, orderStatus: 'PAYMENT_PENDING' }, include: { items: true } });
     const checkoutUrl = mercadoPagoMode === 'test' ? payment.sandbox_init_point : payment.init_point;
     return res.status(201).json({ order: orderPayload(savedOrder), payment: { configured: true, type: 'CARD', preferenceId: payment.id, checkoutUrl, mode: mercadoPagoMode } });
   } catch (error) {
+    if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+    if (parsed.data.paymentMethod === 'PIX') {
+      console.error('Erro ao registrar pedido Pix manual:', error);
+      return res.status(500).json({ error: 'Não foi possível registrar o pedido. Confira os dados e tente novamente.' });
+    }
     const safeError = safeMercadoPagoError(error);
     console.error('Mercado Pago HTTP status:', safeError.status || safeError.mercadoPagoStatus || 'unknown');
     console.error('Mercado Pago error:', safeError.mercadoPagoMessage || safeError.message);
@@ -488,8 +755,22 @@ app.get('/api/admin/orders', requireAdmin, async (_req, res) => {
 app.patch('/api/admin/orders/:id/status', requireAdmin, async (req, res) => {
   const parsed = statusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Status invalido.' });
-  const order = await prisma.order.update({ where: { id: req.params.id }, data: { orderStatus: parsed.data.status }, include: { items: true } });
+  const existingOrder = await prisma.order.findUnique({ where: { id: req.params.id } });
+  if (!existingOrder) return res.status(404).json({ error: 'Pedido nao encontrado.' });
+  const data = { orderStatus: parsed.data.status };
+  if (existingOrder.paymentMethod === 'CASH' && parsed.data.status === 'PAID') data.paymentStatus = 'APPROVED';
+  if (existingOrder.paymentMethod === 'CASH' && parsed.data.status === 'CANCELLED') data.paymentStatus = 'CANCELLED';
+  const order = await prisma.order.update({ where: { id: req.params.id }, data, include: { items: true } });
   res.json(orderPayload(order));
+});
+app.patch('/api/admin/orders/:id/proof-status', requireAdmin, async (req, res) => {
+  const parsed = z.object({ status: z.enum(['CONFIRMED', 'REJECTED']) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Status do comprovante invalido.' });
+  const order = await prisma.order.findUnique({ where: { id: req.params.id }, include: { items: true } });
+  if (!order) return res.status(404).json({ error: 'Pedido nao encontrado.' });
+  const nextStatus = parsed.data.status === 'CONFIRMED' ? { paymentStatus: 'APPROVED', orderStatus: 'PAID', pixProofStatus: 'CONFIRMED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' } : { paymentStatus: 'REJECTED', orderStatus: 'CANCELLED', pixProofStatus: 'REJECTED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' };
+  const updated = await prisma.order.update({ where: { id: order.id }, data: nextStatus, include: { items: true } });
+  res.json(orderPayload(updated));
 });
 app.get('/api/admin/products', requireAdmin, async (_req, res) => res.json(await prisma.product.findMany({ orderBy: { createdAt: 'asc' } })));
 app.post('/api/admin/products', requireAdmin, async (req, res) => {
@@ -507,6 +788,106 @@ app.patch('/api/admin/settings', requireAdmin, async (req, res) => {
   const parsed = z.object({ deliveryFeeCents: z.number().int().min(0).max(100000) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Taxa invalida.' });
   res.json(await prisma.setting.upsert({ where: { id: 'main' }, update: parsed.data, create: parsed.data }));
+});
+
+app.get('/api/admin/cash/summary', requireAdmin, async (req, res) => {
+  const period = String(req.query.period || 'today');
+  const customStart = req.query.from ? String(req.query.from) : null;
+  const customEnd = req.query.to ? String(req.query.to) : null;
+  const startDate = customStart && parseLocalDate(customStart);
+  const endDate = customEnd && parseLocalDate(customEnd);
+  if (period === 'custom' && (!startDate || !endDate || startDate > endDate)) return res.status(400).json({ error: 'Período personalizado inválido.' });
+  const summary = await getCashSummary(period, customStart, customEnd);
+  res.json(summary);
+});
+app.get('/api/admin/cash/closures', requireAdmin, async (_req, res) => {
+  const closures = await prisma.cashClosure.findMany({ orderBy: { closedAt: 'desc' } });
+  res.json(closures);
+});
+app.get('/api/admin/cash/history', requireAdmin, async (req, res) => {
+  const period = String(req.query.period || 'today');
+  const customStart = req.query.from ? String(req.query.from) : null;
+  const customEnd = req.query.to ? String(req.query.to) : null;
+  const startDate = customStart && parseLocalDate(customStart);
+  const endDate = customEnd && parseLocalDate(customEnd);
+  if (period === 'custom' && (!startDate || !endDate || startDate > endDate)) return res.status(400).json({ error: 'Período personalizado inválido.' });
+  const summary = await getCashSummary(period, customStart, customEnd);
+  const movements = summary.movements.map(item => ({
+    date: item.createdAt,
+    kind: item.type === 'OPENING' ? 'abertura' : item.type === 'ENTRY' ? 'entrada' : 'saida',
+    description: item.description,
+    valor: item.amountCents,
+    status: item.type
+  }));
+  res.json({ sales: summary.sales, movements });
+});
+app.post('/api/admin/cash/open', requireAdmin, async (req, res) => {
+  const parsed = z.object({ openingBalanceCents: z.number().int().min(0).max(100000000) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Saldo inicial invalido.' });
+
+  const todayWindow = getDateWindow('today');
+  const alreadyOpened = await prisma.cashMovement.findFirst({
+    where: {
+      description: cashOpeningDescription,
+      createdAt: { gte: todayWindow.from, lt: todayWindow.to }
+    }
+  });
+
+  if (alreadyOpened) return res.status(409).json({ error: 'O caixa já foi aberto hoje.' });
+
+  const movement = await prisma.cashMovement.create({
+    data: {
+      type: 'ENTRY',
+      amountCents: parsed.data.openingBalanceCents,
+      description: 'Abertura do caixa',
+      createdBy: req.admin?.email || 'admin'
+    }
+  });
+
+  res.status(201).json(movement);
+});
+app.post('/api/admin/cash/movements', requireAdmin, async (req, res) => {
+  const parsed = cashMovementSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Movimentacao invalida.' });
+  const movement = await prisma.cashMovement.create({
+    data: {
+      type: parsed.data.type,
+      amountCents: parsed.data.amountCents,
+      description: parsed.data.description,
+      createdBy: req.admin?.email || 'admin'
+    }
+  });
+  res.status(201).json(movement);
+});
+app.post('/api/admin/cash/close', requireAdmin, async (req, res) => {
+  const parsed = cashClosureSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Fechamento invalido.' });
+
+  const todayWindow = getDateWindow('today');
+  const alreadyClosed = await prisma.cashClosure.findFirst({
+    where: { createdAt: { gte: todayWindow.from, lt: todayWindow.to } }
+  });
+
+  if (alreadyClosed) return res.status(409).json({ error: 'Já existe um fechamento para o período atual.' });
+
+  const summary = await getCashSummary('today');
+  const closure = await prisma.cashClosure.create({ data: {
+    openingBalanceCents: summary.openingBalanceCents,
+    totalSoldCents: summary.totalSoldCents,
+    totalReceivedCents: summary.totalReceivedCents,
+    cashCents: parsed.data.cashCents,
+    pixCents: summary.pixCents,
+    cardCents: summary.cardCents,
+    feesCents: summary.feesCents,
+    expensesCents: summary.manualOutputsCents,
+    manualEntriesCents: summary.manualEntriesCents,
+    manualOutputsCents: summary.manualOutputsCents,
+    closingBalanceCents: summary.expectedCashCents,
+    profitCents: summary.profitCents,
+    closedAt: new Date(),
+    createdAt: new Date()
+  } });
+  res.status(201).json({ ...closure, differenceCents: parsed.data.cashCents - summary.expectedCashCents, profitIsPartial: summary.profitIsPartial });
 });
 
 app.use(express.static(__dirname));

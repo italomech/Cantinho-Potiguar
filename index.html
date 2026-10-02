@@ -19,7 +19,7 @@
           <span class="brand-name">Cantinho Potiguar</span>
         </div>
 
-        <nav class="menu" aria-label="Menu principal">
+        <nav class="menu" id="main-menu" data-main-menu aria-label="Menu principal">
           <a href="#inicio">Início</a>
           <a href="#cardapio">Cardápio</a>
           <a href="#beneficios">Benefícios</a>
@@ -27,6 +27,9 @@
           <a href="#contato">Contato</a>
         </nav>
 
+        <button class="menu-toggle" type="button" data-mobile-menu-toggle aria-label="Abrir menu" aria-expanded="false" aria-controls="main-menu">
+          <span class="menu-toggle-icon" aria-hidden="true"></span>
+        </button>
         <button class="btn btn-primary cart-trigger" type="button" data-open-cart>Peça agora <span class="cart-count" data-cart-count>0</span></button>
       </div>
     </header>
@@ -261,8 +264,24 @@
           <label>WhatsApp<input name="phone" required autocomplete="tel" /></label>
           <fieldset><legend>Forma de entrega</legend><label class="choice"><input type="radio" name="deliveryMethod" value="DELIVERY" checked /> Entrega</label><label class="choice"><input type="radio" name="deliveryMethod" value="PICKUP" /> Retirada no local</label></fieldset>
           <div class="address-fields" data-address-fields><label>Endereço<input name="address" autocomplete="street-address" /></label><div class="form-row"><label>Número<input name="addressNumber" /></label><label>Bairro<input name="neighborhood" /></label></div><label>Complemento<input name="complement" /></label><label>Ponto de referência<input name="reference" /></label></div>
-          <fieldset><legend>Pagamento</legend><label class="choice"><input type="radio" name="paymentMethod" value="PIX" checked /> Pix</label><label class="choice"><input type="radio" name="paymentMethod" value="CARD" /> Cartão de crédito</label></fieldset>
-          <button class="btn btn-primary" type="submit">Confirmar pedido</button><p class="form-message" data-form-message></p>
+          <input type="hidden" name="paymentMethod" value="PIX" />
+          <section class="pix-payment" aria-labelledby="pix-payment-title">
+            <h3 id="pix-payment-title">Pague via PIX</h3>
+            <img class="pix-qr" data-pix-qr alt="QR Code para pagamento via Pix" hidden />
+            <p class="pix-config-message" data-pix-config-message>Carregando dados do Pix...</p>
+            <p class="pix-key-line"><strong>Chave PIX:</strong> <code data-pix-key></code></p>
+            <button class="btn btn-secondary" type="button" data-copy-pix-key disabled>Copiar chave PIX</button>
+          </section>
+          <div class="pix-proof-field">
+            <p>Depois de realizar o pagamento, envie o comprovante para confirmar seu pedido.</p>
+            <label class="proof-file-label">Selecionar comprovante<input type="file" name="pixProof" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" /></label>
+            <div class="pix-proof-preview" data-pix-proof-preview hidden>
+              <img data-pix-proof-image alt="Prévia do comprovante selecionado" hidden />
+              <p data-pix-proof-name></p>
+            </div>
+            <p class="pix-proof-status" data-pix-proof-status aria-live="polite">Selecione um arquivo de até 10 MB.</p>
+          </div>
+          <button class="btn btn-primary" type="submit" data-send-order disabled>Enviar pedido pelo WhatsApp</button><p class="form-message" data-form-message aria-live="polite"></p>
         </form></section>
         <section class="checkout-order"><h3>Resumo do pedido</h3><div data-checkout-items></div><div class="summary-lines"><div><span>Subtotal</span><strong data-checkout-subtotal>R$ 0,00</strong></div><div><span>Entrega</span><strong data-checkout-delivery>R$ 0,00</strong></div><div class="total-row"><span>Total</span><strong data-checkout-total>R$ 0,00</strong></div></div><div class="payment-result" data-payment-result></div></section>
       </div>

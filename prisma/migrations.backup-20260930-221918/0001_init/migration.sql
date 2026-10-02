@@ -1,0 +1,71 @@
+-- CreateTable
+CREATE TABLE "Admin" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "email" TEXT NOT NULL,
+    "passwordHash" TEXT NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "Product" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "imageUrl" TEXT NOT NULL,
+    "priceCents" INTEGER NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "Setting" (
+    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'main',
+    "deliveryFeeCents" INTEGER NOT NULL DEFAULT 500
+);
+
+-- CreateTable
+CREATE TABLE "Order" (
+    "id" TEXT NOT NULL,
+    "number" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    "customerName" TEXT NOT NULL,
+    "phone" TEXT NOT NULL,
+    "deliveryMethod" TEXT NOT NULL,
+    "address" TEXT,
+    "addressNumber" TEXT,
+    "complement" TEXT,
+    "neighborhood" TEXT,
+    "reference" TEXT,
+    "subtotalCents" INTEGER NOT NULL,
+    "deliveryFeeCents" INTEGER NOT NULL,
+    "totalCents" INTEGER NOT NULL,
+    "paymentMethod" TEXT NOT NULL,
+    "paymentStatus" TEXT NOT NULL DEFAULT 'PENDING',
+    "orderStatus" TEXT NOT NULL DEFAULT 'RECEIVED',
+    "paymentId" TEXT,
+    "preferenceId" TEXT,
+    "whatsappSendingAt" DATETIME,
+    "whatsappSentAt" DATETIME,
+    "whatsappMessageId" TEXT
+);
+
+-- CreateTable
+CREATE TABLE "OrderItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "orderId" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "productName" TEXT NOT NULL,
+    "unitPriceCents" INTEGER NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    CONSTRAINT "OrderItem_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "OrderItem_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Admin_email_key" ON "Admin"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Order_id_key" ON "Order"("id");
+

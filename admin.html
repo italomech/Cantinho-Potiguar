@@ -11,7 +11,55 @@
     <section class="admin-content" data-admin-content hidden>
       <div class="admin-toolbar"><div><h2>Pedidos</h2><p>Atualização automática a cada 15 segundos.</p></div><button class="btn btn-primary" data-refresh>Atualizar agora</button></div>
       <div class="order-list" data-orders></div>
-      <div class="admin-grid"><section><h2>Produtos</h2><form class="admin-form" data-product-form><input type="hidden" name="id" /><label>Nome<input name="name" required /></label><label>Descrição<textarea name="description" required></textarea></label><label>Imagem (URL)<input name="imageUrl" type="url" required /></label><label>Preço em centavos<input name="priceCents" type="number" min="1" required /></label><label class="choice"><input name="active" type="checkbox" checked /> Ativo</label><button class="btn btn-primary" type="submit">Salvar produto</button><button class="btn btn-secondary" type="button" data-clear-product>Limpar</button><p class="form-message" data-product-message></p></form><div data-products></div></section><section><h2>Configurações</h2><form class="admin-form" data-settings-form><label>Taxa de entrega em centavos<input name="deliveryFeeCents" type="number" min="0" required /></label><button class="btn btn-primary" type="submit">Salvar taxa</button><p class="form-message" data-settings-message></p></form></section></div>
+      <div class="admin-grid"><section><h2>Produtos</h2><form class="admin-form" data-product-form><input type="hidden" name="id" /><label>Nome<input name="name" required /></label><label>Descrição<textarea name="description" required></textarea></label><label>Imagem (URL)<input name="imageUrl" type="url" required /></label><label>Preço em centavos<input name="priceCents" type="number" min="1" required /></label><label>Custo do produto em centavos<input name="costCents" type="number" min="0" /></label><label class="choice"><input name="active" type="checkbox" checked /> Ativo</label><button class="btn btn-primary" type="submit">Salvar produto</button><button class="btn btn-secondary" type="button" data-clear-product>Limpar</button><p class="form-message" data-product-message></p></form><div data-products></div></section><section><h2>Configurações</h2><form class="admin-form" data-settings-form><label>Taxa de entrega em centavos<input name="deliveryFeeCents" type="number" min="0" required /></label><button class="btn btn-primary" type="submit">Salvar taxa</button><p class="form-message" data-settings-message></p></form></section></div>
+      <section class="cash-panel">
+        <div class="admin-toolbar"><div><h2>Caixa</h2><p>Resumo financeiro do período selecionado.</p></div><button class="btn btn-primary" data-cash-refresh>Atualizar caixa</button></div>
+        <div class="cash-filters" aria-label="Filtros do caixa">
+          <button class="btn btn-secondary is-active" type="button" data-period="today">Hoje</button>
+          <button class="btn btn-secondary" type="button" data-period="yesterday">Ontem</button>
+          <button class="btn btn-secondary" type="button" data-period="last7">Últimos 7 dias</button>
+          <button class="btn btn-secondary" type="button" data-period="month">Este mês</button>
+        </div>
+        <div class="cash-custom-range">
+          <label>De<input type="date" data-cash-from /></label>
+          <label>Até<input type="date" data-cash-to /></label>
+          <button class="btn btn-secondary" type="button" data-custom-period>Aplicar período</button>
+        </div>
+        <div class="cash-summary-groups">
+          <section class="cash-summary-group"><h3>Saldo inicial</h3><div class="cash-summary-grid"><article class="cash-stat"><span>Saldo inicial</span><strong data-cash-opening>R$ 0,00</strong></article></div></section>
+          <section class="cash-summary-group"><h3>Vendas</h3><div class="cash-summary-grid"><article class="cash-stat"><span>Dinheiro</span><strong data-cash-cash>R$ 0,00</strong></article><article class="cash-stat"><span>Pix</span><strong data-cash-pix>R$ 0,00</strong></article><article class="cash-stat"><span>Cartão</span><strong data-cash-card>R$ 0,00</strong></article><article class="cash-stat"><span>Total de vendas</span><strong data-cash-sales>R$ 0,00</strong></article></div></section>
+          <section class="cash-summary-group"><h3>Movimentações</h3><div class="cash-summary-grid"><article class="cash-stat"><span>Entradas</span><strong data-cash-entries>R$ 0,00</strong></article><article class="cash-stat"><span>Saídas</span><strong data-cash-outputs>R$ 0,00</strong></article></div></section>
+          <section class="cash-summary-group"><h3>Financeiro</h3><div class="cash-summary-grid"><article class="cash-stat"><span>Faturamento</span><strong data-cash-revenue>R$ 0,00</strong></article><article class="cash-stat"><span>Custos conhecidos</span><strong data-cash-costs>R$ 0,00</strong><small data-cash-cost-status></small></article><article class="cash-stat"><span>Taxas disponíveis</span><strong data-cash-fees>R$ 0,00</strong><small data-cash-fee-status></small></article><article class="cash-stat"><span data-cash-profit-label>Lucro</span><strong data-cash-profit>R$ 0,00</strong></article></div></section>
+          <section class="cash-summary-group"><h3>Caixa físico</h3><div class="cash-summary-grid"><article class="cash-stat"><span>Saldo esperado</span><strong data-cash-expected>R$ 0,00</strong></article><article class="cash-stat"><label>Valor contado<input type="number" min="0" step="0.01" data-cash-counted /></label></article><article class="cash-stat"><span>Diferença</span><strong data-cash-difference>Informe o valor contado</strong></article></div></section>
+        </div>
+        <div class="cash-actions-grid">
+          <div class="cash-column-stack">
+            <form class="admin-form" data-cash-open-form>
+              <h3>Abertura do caixa</h3>
+              <label>Saldo inicial em reais<input name="openingBalanceCents" type="number" min="0" step="0.01" required /></label>
+              <button class="btn btn-primary" type="submit">Abrir caixa</button>
+              <p class="form-message" data-cash-open-message></p>
+            </form>
+            <form class="admin-form" data-cash-movement-form>
+              <h3>Movimentação manual</h3>
+              <label>Tipo<select name="type"><option value="ENTRY">Entrada</option><option value="OUTPUT">Saída</option></select></label>
+              <label>Valor<input name="amountCents" type="number" min="0.01" step="0.01" required /></label>
+              <label>Descrição<input name="description" maxlength="200" required /></label>
+              <button class="btn btn-primary" type="submit">Salvar movimento</button>
+              <p class="form-message" data-cash-message></p>
+            </form>
+          </div>
+          <div class="cash-actions-side">
+            <div class="cash-close-box">
+              <h3>Fechamento</h3>
+              <button class="btn btn-primary" type="button" data-close-cash>Fechar caixa</button>
+              <p class="form-message" data-cash-close-message></p>
+            </div>
+            <div class="cash-history" data-cash-history></div>
+          </div>
+        </div>
+        <div class="cash-closures" data-cash-closures></div>
+      </section>
     </section>
   </main>
   <script src="admin.js"></script>

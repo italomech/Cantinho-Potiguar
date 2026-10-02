@@ -14,6 +14,7 @@ export function formatWhatsAppOrderMessage(order) {
   const paymentMethod = order.paymentMethod === 'CARD' ? 'CARTAO' : order.paymentMethod || 'Nao informado';
   const deliveryMethod = order.deliveryMethod === 'PICKUP' ? 'Retirada no local' : 'Entrega';
   const paymentStatus = order.paymentStatus === 'APPROVED' || order.orderStatus === 'PAID' ? 'PAGAMENTO APROVADO' : order.paymentStatus || 'PENDENTE';
+  const proofLine = order.pixProofUrl ? `\nComprovante Pix: ${order.pixProofUrl}` : '';
 
   return [
     '🍱 NOVO PEDIDO — CANTINHO POTIGUAR',
@@ -42,7 +43,8 @@ export function formatWhatsAppOrderMessage(order) {
     '',
     'PAGAMENTO',
     `Forma de pagamento: ${paymentMethod}`,
-    `Status: ${paymentStatus}`
+    `Status: ${paymentStatus}`,
+    proofLine
   ].join('\n');
 }
 

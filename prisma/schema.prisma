@@ -20,6 +20,7 @@ model Product {
   description String
   imageUrl    String
   priceCents  Int
+  costCents   Int?
   active      Boolean     @default(true)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -27,35 +28,69 @@ model Product {
 }
 
 model Setting {
-  id             String @id @default("main")
-  deliveryFeeCents Int   @default(500)
+  id               String @id @default("main")
+  deliveryFeeCents Int    @default(500)
 }
 
 model Order {
-  id                  String      @unique @default(cuid())
-  number              Int         @id @default(autoincrement())
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
-  customerName        String
-  phone               String
-  deliveryMethod      DeliveryMethod
-  address             String?
-  addressNumber       String?
-  complement          String?
-  neighborhood        String?
-  reference           String?
-  subtotalCents       Int
-  deliveryFeeCents    Int
-  totalCents          Int
-  paymentMethod       PaymentMethod
-  paymentStatus       PaymentStatus @default(PENDING)
-  orderStatus         OrderStatus   @default(RECEIVED)
-  paymentId           String?
-  preferenceId        String?
-  whatsappSendingAt   DateTime?
-  whatsappSentAt      DateTime?
-  whatsappMessageId   String?
-  items               OrderItem[]
+  id                    String          @unique @default(cuid())
+  number                Int             @id @default(autoincrement())
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  customerName          String
+  phone                 String
+  deliveryMethod        DeliveryMethod
+  address               String?
+  addressNumber         String?
+  complement            String?
+  neighborhood          String?
+  reference             String?
+  subtotalCents         Int
+  deliveryFeeCents      Int
+  totalCents            Int
+  feeCents              Int             @default(0)
+  paymentMethod         PaymentMethod
+  paymentStatus         PaymentStatus   @default(PENDING)
+  orderStatus           OrderStatus     @default(RECEIVED)
+  paymentId             String?
+  preferenceId          String?
+  pixProofUrl           String?
+  pixProofMime          String?
+  pixProofStatus        PixProofStatus  @default(NONE)
+  pixProofUploadedAt    DateTime?
+  pixProofConfirmedAt   DateTime?
+  pixProofConfirmedBy   String?
+  whatsappSendingAt     DateTime?
+  whatsappSentAt        DateTime?
+  whatsappMessageId     String?
+  items                 OrderItem[]
+}
+
+model CashMovement {
+  id          String            @id @default(cuid())
+  createdAt   DateTime          @default(now())
+  type        CashMovementType
+  amountCents Int
+  description String
+  createdBy   String?
+}
+
+model CashClosure {
+  id                    String   @id @default(cuid())
+  createdAt             DateTime @default(now())
+  closedAt              DateTime @default(now())
+  openingBalanceCents   Int
+  totalSoldCents        Int
+  totalReceivedCents    Int
+  cashCents             Int
+  pixCents              Int
+  cardCents             Int
+  feesCents             Int
+  expensesCents         Int
+  manualEntriesCents    Int
+  manualOutputsCents    Int
+  closingBalanceCents   Int
+  profitCents           Int
 }
 
 model OrderItem {
@@ -77,6 +112,7 @@ enum DeliveryMethod {
 enum PaymentMethod {
   PIX
   CARD
+  CASH
 }
 
 enum PaymentStatus {
@@ -94,4 +130,16 @@ enum OrderStatus {
   OUT_FOR_DELIVERY
   COMPLETED
   CANCELLED
+}
+
+enum CashMovementType {
+  ENTRY
+  OUTPUT
+}
+
+enum PixProofStatus {
+  NONE
+  SENT
+  CONFIRMED
+  REJECTED
 }

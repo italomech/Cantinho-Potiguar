@@ -1,4 +1,4 @@
-const state = { products: [], cart: new Map(), deliveryFee: 0 };
+const state = { products: [], cart: new Map(), deliveryFee: 0, pixPayment: null };
 function parsePrice(value) {
 	if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
 	const normalized = String(value ?? '').trim().replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
@@ -8,6 +8,24 @@ function parsePrice(value) {
 const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(parsePrice(value));
 const $ = selector => document.querySelector(selector);
 const apiBase = window.CANTINHO_API_BASE || '';
+const mobileMenuToggle = $('[data-mobile-menu-toggle]');
+const mainMenu = $('[data-main-menu]');
+
+function setMobileMenuOpen(isOpen) {
+	mainMenu.classList.toggle('is-open', isOpen);
+	mobileMenuToggle.setAttribute('aria-expanded', String(isOpen));
+	mobileMenuToggle.setAttribute('aria-label', isOpen ? 'Fechar menu' : 'Abrir menu');
+}
+
+mobileMenuToggle.addEventListener('click', () => {
+	setMobileMenuOpen(mobileMenuToggle.getAttribute('aria-expanded') !== 'true');
+});
+mainMenu.addEventListener('click', event => {
+	if (event.target.closest('a')) setMobileMenuOpen(false);
+});
+document.addEventListener('keydown', event => {
+	if (event.key === 'Escape') setMobileMenuOpen(false);
+});
 
 async function apiFetch(path, options) {
 	try {
@@ -23,7 +41,10 @@ async function loadCatalog() {
 	const [productsResponse, settingsResponse] = await Promise.all([apiFetch('/api/products'), apiFetch('/api/settings')]);
 	if (!productsResponse.ok || !settingsResponse.ok) throw new Error('Não foi possível carregar o cardápio.');
 	state.products = (await productsResponse.json()).map(product => ({ ...product, id: String(product.id), price: parsePrice(product.price ?? Number(product.priceCents) / 100) }));
-	state.deliveryFee = (await settingsResponse.json()).deliveryFee;
+	const settings = await settingsResponse.json();
+	state.deliveryFee = settings.deliveryFee;
+	state.pixPayment = settings.pix;
+	renderPixPayment();
 	const aliases = { 'creme-de-frango': 'Creme de Frango', panqueca: 'Panqueca', strogonoff: 'Strogonoff', lasanha: 'Lasanha', 'escondidinho-de-carne': 'Escondidinho de Carne' };
 	for (const [slug, name] of Object.entries(aliases)) {
 		const product = state.products.find(item => item.name === name);
@@ -66,20 +87,23 @@ function renderCart() {
 function changeCart(productId, delta) { const normalizedProductId = String(productId); const next = (state.cart.get(normalizedProductId) || 0) + delta; next > 0 ? state.cart.set(normalizedProductId, next) : state.cart.delete(normalizedProductId); renderCart(); }
 function openCart() { $('[data-cart-panel]').classList.add('is-open'); $('.overlay').classList.add('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'false'); }
 function closeCart() { $('[data-cart-panel]').classList.remove('is-open'); $('.overlay').classList.remove('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'true'); }
-async function pollPaymentStatus(orderId) {
-	for (let attempt = 0; attempt < 60; attempt += 1) {
-		await new Promise(resolve => setTimeout(resolve, 5000));
-		try {
-			const response = await apiFetch(`/api/orders/${encodeURIComponent(orderId)}/payment-status`);
-			if (!response.ok) continue;
-			const status = await response.json();
-			const statusElement = $('[data-payment-status]');
-			if (!statusElement) return;
-			if (status.paymentStatus === 'APPROVED') { statusElement.textContent = 'Pagamento confirmado'; return; }
-			if (status.paymentStatus === 'REJECTED' || status.orderStatus === 'CANCELLED') { statusElement.textContent = 'Pagamento recusado ou cancelado'; return; }
-			statusElement.textContent = 'Aguardando pagamento';
-		} catch { }
-	}
+
+function renderPixPayment() {
+	const configured = Boolean(state.pixPayment?.configured);
+	const qrConfigured = configured && Boolean(state.pixPayment?.qrConfigured && state.pixPayment?.qrCodeDataUrl);
+	const qr = $('[data-pix-qr]');
+	const key = $('[data-pix-key]');
+	const keyLine = key.closest('.pix-key-line');
+	const message = $('[data-pix-config-message]');
+	qr.hidden = !qrConfigured;
+	qr.src = qrConfigured ? state.pixPayment.qrCodeDataUrl : '';
+	key.textContent = configured ? state.pixPayment.pixKey : '';
+	keyLine.hidden = !configured;
+	message.textContent = !configured
+		? 'Pagamento Pix indisponível no momento. Configure a chave Pix no servidor.'
+		: qrConfigured ? '' : 'A chave Pix está pronta para copiar. O QR Code será exibido após configurar um BR Code compatível com esta chave.';
+	$('[data-copy-pix-key]').disabled = !configured;
+	updateSendOrderButton();
 }
 document.addEventListener('click', event => {
 	const add = event.target.closest('.add-to-cart');
@@ -93,40 +117,232 @@ document.addEventListener('click', event => {
 	if (event.target.closest('[data-close-checkout]')) $('[data-checkout-dialog]').close();
 });
 document.addEventListener('input', event => { if (event.target.name === 'neighborhood') renderCart(); });
-document.addEventListener('change', event => { if (event.target.name === 'deliveryMethod') { $('[data-address-fields]').hidden = event.target.value === 'PICKUP'; renderCart(); } });
+document.addEventListener('change', event => {
+	if (event.target.name === 'deliveryMethod') { $('[data-address-fields]').hidden = event.target.value === 'PICKUP'; renderCart(); }
+});
+
+const proofInput = $('[data-checkout-form] input[name="pixProof"]');
+const proofStatus = $('[data-pix-proof-status]');
+const proofPreview = $('[data-pix-proof-preview]');
+const proofImage = $('[data-pix-proof-image]');
+const proofName = $('[data-pix-proof-name]');
+const sendOrderButton = $('[data-send-order]');
+const maxProofSize = 10 * 1024 * 1024;
+const proofMimeByExtension = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.pdf': 'application/pdf' };
+let proofPreviewUrl = null;
+let orderCreated = false;
+let orderShared = false;
+let createdOrderMessage = '';
+
+function isSupportedProof(file) {
+	const extension = file.name.match(/\.[^.]+$/)?.[0].toLowerCase();
+	const expectedMime = proofMimeByExtension[extension];
+	return Boolean(expectedMime && (!file.type || file.type === expectedMime || file.type === 'application/octet-stream'));
+}
+
+function updateSendOrderButton() {
+	const file = proofInput.files?.[0];
+	sendOrderButton.disabled = orderShared || (!orderCreated && (!state.pixPayment?.configured || !file || file.size > maxProofSize || !isSupportedProof(file)));
+}
+
+function clearProofPreview() {
+	if (proofPreviewUrl) URL.revokeObjectURL(proofPreviewUrl);
+	proofPreviewUrl = null;
+	proofPreview.hidden = true;
+	proofImage.hidden = true;
+	proofImage.removeAttribute('src');
+	proofName.textContent = '';
+}
+
+proofInput.addEventListener('change', () => {
+	const file = proofInput.files?.[0];
+	clearProofPreview();
+	if (!file) {
+		proofStatus.textContent = 'Selecione um arquivo de até 10 MB.';
+		proofStatus.classList.remove('is-error');
+		updateSendOrderButton();
+		return;
+	}
+	if (file.size === 0) {
+		proofInput.value = '';
+		proofStatus.textContent = 'O arquivo está vazio. Selecione outro comprovante.';
+		proofStatus.classList.add('is-error');
+		updateSendOrderButton();
+		return;
+	}
+	if (file.size > maxProofSize) {
+		proofInput.value = '';
+		proofStatus.textContent = 'O arquivo excede o limite de 10 MB. Selecione um arquivo menor.';
+		proofStatus.classList.add('is-error');
+		updateSendOrderButton();
+		return;
+	}
+	if (!isSupportedProof(file)) {
+		proofInput.value = '';
+		proofStatus.textContent = 'Formato não aceito. Selecione JPG, JPEG, PNG, WEBP ou PDF.';
+		proofStatus.classList.add('is-error');
+		updateSendOrderButton();
+		return;
+	}
+	proofName.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+	proofPreview.hidden = false;
+	const fileExtension = file.name.match(/\.[^.]+$/)?.[0].toLowerCase();
+	if (proofMimeByExtension[fileExtension]?.startsWith('image/')) {
+		proofPreviewUrl = URL.createObjectURL(file);
+		proofImage.src = proofPreviewUrl;
+		proofImage.hidden = false;
+	}
+	proofStatus.textContent = 'Comprovante selecionado.';
+	proofStatus.classList.remove('is-error');
+	updateSendOrderButton();
+});
+
+function formatCustomerOrderMessage(order) {
+	const lines = [
+		'🍱 NOVO PEDIDO — CANTINHO POTIGUAR',
+		'',
+		`Cliente: ${order.customerName}`,
+		`Telefone: ${order.phone}`
+	];
+	if (order.deliveryMethod === 'PICKUP') {
+		lines.push('', 'Retirada no local');
+	} else {
+		const address = [order.address, order.addressNumber ? `Nº ${order.addressNumber}` : ''].filter(Boolean).join(', ');
+		if (address) lines.push('', 'Endereço:', address);
+		if (order.neighborhood) lines.push('', 'Bairro:', order.neighborhood);
+		if (order.complement) lines.push('', 'Complemento:', order.complement);
+		if (order.reference) lines.push('', 'Ponto de referência:', order.reference);
+	}
+	lines.push(
+		'',
+		'PEDIDO:',
+		...(order.items || []).map(item => `${item.quantity}x ${item.productName} — ${money(item.unitPriceCents * item.quantity / 100)}`),
+		'',
+		`Subtotal: ${money(order.subtotal)}`,
+		`Entrega: ${money(order.deliveryFee)}`,
+		`TOTAL: ${money(order.total)}`,
+		'',
+		'Pagamento: PIX',
+		'Comprovante: anexado'
+	);
+	return lines.join('\n');
+}
+
+function supportsFileSharing(file) {
+	try {
+		return typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] });
+	} catch {
+		return false;
+	}
+}
+
+function shareOrderFallback(message, popup) {
+	const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+	const baseUrl = isMobile ? 'https://wa.me/?text=' : 'https://web.whatsapp.com/send?text=';
+	const shareUrl = `${baseUrl}${encodeURIComponent(message)}`;
+	proofStatus.textContent = 'Este dispositivo não permite compartilhar o arquivo automaticamente. O WhatsApp abrirá com a mensagem pronta; anexe o comprovante manualmente.';
+	proofStatus.classList.add('is-error');
+	if (popup) popup.location.href = shareUrl;
+	else window.location.assign(shareUrl);
+}
 
 $('[data-checkout-form]').addEventListener('submit', async event => {
 	event.preventDefault();
 	const form = event.currentTarget;
 	const message = $('[data-form-message]');
-	const data = Object.fromEntries(new FormData(form));
-	data.items = cartItems().map(({ product, quantity }) => ({ productId: product.id, quantity: Number(quantity) }));
-	message.textContent = 'Criando seu pedido...';
-	form.querySelector('button[type="submit"]').disabled = true;
-	try {
-		const response = await apiFetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-		const result = await response.json();
-		if (!response.ok) throw new Error(result.error || 'Confira os dados informados.');
-		state.cart.clear(); renderCart(); form.reset(); $('[data-address-fields]').hidden = false;
-		message.textContent = 'Pedido realizado com sucesso!';
-		const payment = $('[data-payment-result]');
-		if (result.payment?.type === 'PIX' && result.payment.qr_code_base64 && result.payment.qr_code) {
-			const ticketLink = result.payment.ticket_url ? `<a class="btn btn-secondary" href="${result.payment.ticket_url}" target="_blank" rel="noreferrer">ABRIR PAGAMENTO PIX</a>` : '';
-			payment.innerHTML = `<h4>Pagamento Pix</h4><p class="notice" data-payment-status>Aguardando pagamento</p><img class="pix-qr" src="data:image/jpeg;base64,${result.payment.qr_code_base64}" alt="QR Code Pix" /><p>Valor: <strong>${money(result.payment.amount ?? result.order.total)}</strong></p><label>Código Pix Copia e Cola<textarea readonly data-pix-code>${result.payment.qr_code}</textarea></label><button class="btn btn-secondary" type="button" data-copy-pix>Copiar Pix Copia e Cola</button>${ticketLink}<p>O pedido será encaminhado à marmitaria após a confirmação do pagamento.</p>`;
-			pollPaymentStatus(result.order.id);
+	const proofFile = proofInput.files?.[0];
+	if (orderCreated && createdOrderMessage && proofFile) {
+		if (supportsFileSharing(proofFile)) {
+			try {
+				await navigator.share({ title: 'Pedido Cantinho Potiguar', text: createdOrderMessage, files: [proofFile] });
+				orderShared = true;
+				proofStatus.textContent = 'Pedido compartilhado. Obrigado!';
+			} catch (error) {
+				if (error.name === 'AbortError') proofStatus.textContent = 'Compartilhamento cancelado. Toque no botão para tentar novamente.';
+				else {
+					shareOrderFallback(createdOrderMessage, null);
+					orderShared = true;
+				}
+			}
+		} else {
+			const whatsappWindow = window.open('about:blank', '_blank');
+			shareOrderFallback(createdOrderMessage, whatsappWindow);
+			orderShared = true;
 		}
-		else if (result.payment?.type === 'CARD' && result.payment.checkoutUrl) payment.innerHTML = `<h4>Pagamento seguro</h4><p>Você será direcionado ao checkout do Mercado Pago.</p><a class="btn btn-primary" href="${result.payment.checkoutUrl}">Pagar com cartão</a><p>O pedido será encaminhado à marmitaria após a confirmação do pagamento.</p>`;
-		else payment.innerHTML = '<p class="notice">O pedido foi registrado, mas o gateway ainda não está configurado no servidor.</p>';
-	} catch (error) { message.textContent = error.message; }
-	finally { form.querySelector('button[type="submit"]').disabled = false; }
+		updateSendOrderButton();
+		return;
+	}
+	if (!proofFile || sendOrderButton.disabled) return;
+	const supportsNativeShare = supportsFileSharing(proofFile);
+	const whatsappWindow = supportsNativeShare ? null : window.open('about:blank', '_blank');
+	if (whatsappWindow) whatsappWindow.opener = null;
+	message.textContent = 'Registrando seu pedido...';
+	sendOrderButton.disabled = true;
+	try {
+		const formData = new FormData(form);
+		formData.delete('pixProof');
+		formData.set('paymentMethod', 'PIX');
+		formData.set('items', JSON.stringify(cartItems().map(({ product, quantity }) => ({ productId: product.id, quantity: Number(quantity) }))));
+		formData.append('proof', proofFile, proofFile.name);
+		const response = await apiFetch('/api/orders', { method: 'POST', body: formData });
+		const result = await response.json().catch(() => ({}));
+		if (!response.ok) throw new Error(result.error || 'Confira os dados informados.');
+		orderCreated = true;
+		state.cart.clear();
+		renderCart();
+		proofInput.disabled = true;
+		message.textContent = `Pedido ${result.order.number ? `#${result.order.number}` : 'registrado'}.`;
+		$('[data-payment-result]').textContent = 'Seu pedido foi registrado e o comprovante foi anexado.';
+		createdOrderMessage = formatCustomerOrderMessage(result.order);
+		if (!supportsNativeShare) {
+			shareOrderFallback(createdOrderMessage, whatsappWindow);
+			orderShared = true;
+			return;
+		}
+		try {
+			await navigator.share({ title: 'Pedido Cantinho Potiguar', text: createdOrderMessage, files: [proofFile] });
+			orderShared = true;
+			proofStatus.textContent = 'Pedido compartilhado. Obrigado!';
+		} catch (error) {
+			if (error.name === 'AbortError') {
+				proofStatus.textContent = 'Compartilhamento cancelado. Toque no botão para tentar novamente.';
+			} else {
+				shareOrderFallback(createdOrderMessage, null);
+				orderShared = true;
+			}
+		}
+	} catch (error) {
+		whatsappWindow?.close();
+		message.textContent = error.message;
+	} finally {
+		updateSendOrderButton();
+	}
 });
 
 document.addEventListener('click', async event => {
-	if (!event.target.closest('[data-copy-pix]')) return;
-	const code = $('[data-pix-code]')?.value;
-	if (!code) return;
-	await navigator.clipboard.writeText(code);
-	event.target.closest('[data-copy-pix]').textContent = 'Pix copiado';
+	const copyButton = event.target.closest('[data-copy-pix-key]');
+	if (!copyButton) return;
+	const pixKey = state.pixPayment?.pixKey;
+	if (!pixKey) return;
+	try {
+		if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(pixKey);
+		else throw new Error('Clipboard indisponível.');
+	} catch {
+		const temporaryInput = document.createElement('textarea');
+		temporaryInput.value = pixKey;
+		temporaryInput.setAttribute('readonly', '');
+		temporaryInput.style.position = 'fixed';
+		temporaryInput.style.opacity = '0';
+		document.body.append(temporaryInput);
+		temporaryInput.select();
+		const copied = document.execCommand('copy');
+		temporaryInput.remove();
+		if (!copied) {
+			proofStatus.textContent = 'Não foi possível copiar automaticamente. Selecione a chave Pix para copiar.';
+			return;
+		}
+	}
+	proofStatus.textContent = 'Chave PIX copiada.';
 });
 
 loadCatalog().then(renderCart).catch(error => { $('[data-form-message]').textContent = error.message; });
