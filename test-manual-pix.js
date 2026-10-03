@@ -102,6 +102,12 @@ try {
     imageUrl: 'https://example.test/pix-test.png',
     priceCents: 2500
   } });
+  const secondProduct = await prisma.product.create({ data: {
+    name: 'Segundo produto Pix teste',
+    description: 'Segundo produto temporário para validar o carrinho.',
+    imageUrl: 'https://example.test/pix-test-second.png',
+    priceCents: 1800
+  } });
   await prisma.$disconnect();
   prisma = null;
 
@@ -113,6 +119,11 @@ try {
   server.stdout.on('data', chunk => { serverOutput += chunk; outputChunks.push(chunk); });
   server.stderr.on('data', chunk => { serverOutput += chunk; outputChunks.push(chunk); });
   await waitForServer(baseUrl, server, () => serverOutput || Buffer.concat(outputChunks).toString());
+
+  const productsResponse = await fetch(`${baseUrl}/api/products`);
+  const products = await productsResponse.json();
+  assert.equal(productsResponse.status, 200, JSON.stringify(products));
+  assert.ok(products.some(item => item.id === product.id), 'catalog API returns the product used by the cart');
 
   const settingsResponse = await fetch(`${baseUrl}/api/settings`);
   const settings = await settingsResponse.json();
@@ -130,7 +141,7 @@ try {
     addressNumber: '15',
     neighborhood: 'Upanema',
     paymentMethod: 'PIX',
-    items: [{ productId: product.id, quantity: 2 }]
+    items: [{ productId: product.id, quantity: 2 }, { productId: secondProduct.id, quantity: 1 }]
   };
   const missingProofResponse = await fetch(`${baseUrl}/api/orders`, {
     method: 'POST',
@@ -148,13 +159,14 @@ try {
   assert.equal(orderResult.payment.type, 'PIX');
   assert.equal(orderResult.payment.pixKey, expectedPixKey);
   assert.equal(orderResult.order.paymentId, null, 'manual Pix does not create a Mercado Pago payment');
-  assert.equal(orderResult.order.items.length, 1, 'the selected product is saved and returned');
-  assert.equal(orderResult.order.items[0].productId, product.id);
-  assert.equal(orderResult.order.items[0].productName, product.name);
-  assert.equal(orderResult.order.items[0].quantity, 2);
-  assert.equal(orderResult.order.subtotal, 50, 'the backend calculates the product subtotal from the database');
+  assert.equal(orderResult.order.items.length, 2, 'both selected products are saved and returned');
+  assert.deepEqual(orderResult.order.items.map(item => [item.productId, item.productName, item.quantity, item.unitPriceCents]), [
+    [product.id, product.name, 2, 2500],
+    [secondProduct.id, secondProduct.name, 1, 1800]
+  ]);
+  assert.equal(orderResult.order.subtotal, 68, 'the backend calculates the product subtotal from the database');
   assert.equal(orderResult.order.deliveryFee, 5, 'the backend calculates the delivery fee from the selected neighborhood');
-  assert.equal(orderResult.order.total, 55, 'subtotal plus delivery equals the stored total');
+  assert.equal(orderResult.order.total, 73, 'subtotal plus delivery equals the stored total');
 
   assert.equal(orderResult.order.pixProofStatus, 'SENT', 'proof is saved with the order');
   uploadedProof = path.join(root, 'uploads', path.basename(orderResult.order.pixProofUrl));
