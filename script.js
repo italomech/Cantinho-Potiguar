@@ -244,12 +244,11 @@ function formatCustomerOrderMessage(order) {
 	return lines.join('\n');
 }
 
-function openOrderWhatsApp(message, popup) {
+function openOrderWhatsApp(message) {
 	const whatsappUrl = `https://wa.me/${orderWhatsAppNumber}?text=${encodeURIComponent(message)}`;
 	proofStatus.textContent = 'O comprovante foi salvo no pedido e o link está incluído na mensagem do WhatsApp.';
 	proofStatus.classList.remove('is-error');
-	if (popup) popup.location.href = whatsappUrl;
-	else window.location.assign(whatsappUrl);
+	window.location.assign(whatsappUrl);
 }
 
 $('[data-checkout-form]').addEventListener('submit', async event => {
@@ -258,15 +257,12 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 	const message = $('[data-form-message]');
 	const proofFile = proofInput.files?.[0];
 	if (orderCreated && createdOrderMessage && proofFile) {
-		const whatsappWindow = window.open('about:blank', '_blank');
-		openOrderWhatsApp(createdOrderMessage, whatsappWindow);
+		openOrderWhatsApp(createdOrderMessage);
 		orderShared = true;
 		updateSendOrderButton();
 		return;
 	}
 	if (!proofFile || sendOrderButton.disabled) return;
-	const whatsappWindow = window.open('about:blank', '_blank');
-	if (whatsappWindow) whatsappWindow.opener = null;
 	message.textContent = 'Registrando seu pedido...';
 	sendOrderButton.disabled = true;
 	try {
@@ -285,10 +281,9 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 		message.textContent = `Pedido ${result.order.number ? `#${result.order.number}` : 'registrado'}.`;
 		$('[data-payment-result]').textContent = 'Seu pedido foi registrado e o comprovante foi anexado.';
 		createdOrderMessage = formatCustomerOrderMessage(result.order);
-		openOrderWhatsApp(createdOrderMessage, whatsappWindow);
+		openOrderWhatsApp(createdOrderMessage);
 		orderShared = true;
 	} catch (error) {
-		whatsappWindow?.close();
 		message.textContent = error.message;
 	} finally {
 		updateSendOrderButton();
