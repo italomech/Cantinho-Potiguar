@@ -8,6 +8,7 @@ function parsePrice(value) {
 const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(parsePrice(value));
 const $ = selector => document.querySelector(selector);
 const apiBase = window.CANTINHO_API_BASE || '';
+const orderWhatsAppNumber = '558498115276';
 const mobileMenuToggle = $('[data-mobile-menu-toggle]');
 const mainMenu = $('[data-main-menu]');
 
@@ -211,6 +212,7 @@ proofInput.addEventListener('change', () => {
 });
 
 function formatCustomerOrderMessage(order) {
+	const proofUrl = order.pixProofUrl ? new URL(order.pixProofUrl, window.location.origin).href : null;
 	const lines = [
 		'🍱 NOVO PEDIDO — CANTINHO POTIGUAR',
 		'',
@@ -218,8 +220,9 @@ function formatCustomerOrderMessage(order) {
 		`Telefone: ${order.phone}`
 	];
 	if (order.deliveryMethod === 'PICKUP') {
-		lines.push('', 'Retirada no local');
+		lines.push('', 'Forma de entrega: Retirada no local');
 	} else {
+		lines.push('', 'Forma de entrega: Entrega');
 		const address = [order.address, order.addressNumber ? `Nº ${order.addressNumber}` : ''].filter(Boolean).join(', ');
 		if (address) lines.push('', 'Endereço:', address);
 		if (order.neighborhood) lines.push('', 'Bairro:', order.neighborhood);
@@ -236,16 +239,14 @@ function formatCustomerOrderMessage(order) {
 		`TOTAL: ${money(order.total)}`,
 		'',
 		'Pagamento: PIX',
-		'Comprovante: anexado'
+		`Comprovante Pix: ${proofUrl || 'arquivo salvo no pedido'}`
 	);
 	return lines.join('\n');
 }
 
 function openOrderWhatsApp(message, popup) {
-	const businessLink = document.querySelector('#contato a[href^="https://wa.me/message/"]').href;
-	const separator = businessLink.includes('?') ? '&' : '?';
-	const whatsappUrl = `${businessLink}${separator}text=${encodeURIComponent(message)}`;
-	proofStatus.textContent = 'Pedido registrado. Envie a mensagem aberta no WhatsApp e anexe o comprovante, se solicitado.';
+	const whatsappUrl = `https://wa.me/${orderWhatsAppNumber}?text=${encodeURIComponent(message)}`;
+	proofStatus.textContent = 'O comprovante foi salvo no pedido e o link está incluído na mensagem do WhatsApp.';
 	proofStatus.classList.remove('is-error');
 	if (popup) popup.location.href = whatsappUrl;
 	else window.location.assign(whatsappUrl);
