@@ -241,22 +241,14 @@ function formatCustomerOrderMessage(order) {
 	return lines.join('\n');
 }
 
-function supportsFileSharing(file) {
-	try {
-		return typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] });
-	} catch {
-		return false;
-	}
-}
-
-function shareOrderFallback(message, popup) {
-	const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-	const baseUrl = isMobile ? 'https://wa.me/?text=' : 'https://web.whatsapp.com/send?text=';
-	const shareUrl = `${baseUrl}${encodeURIComponent(message)}`;
-	proofStatus.textContent = 'Este dispositivo não permite compartilhar o arquivo automaticamente. O WhatsApp abrirá com a mensagem pronta; anexe o comprovante manualmente.';
-	proofStatus.classList.add('is-error');
-	if (popup) popup.location.href = shareUrl;
-	else window.location.assign(shareUrl);
+function openOrderWhatsApp(message, popup) {
+	const businessLink = document.querySelector('#contato a[href^="https://wa.me/message/"]').href;
+	const separator = businessLink.includes('?') ? '&' : '?';
+	const whatsappUrl = `${businessLink}${separator}text=${encodeURIComponent(message)}`;
+	proofStatus.textContent = 'Pedido registrado. Envie a mensagem aberta no WhatsApp e anexe o comprovante, se solicitado.';
+	proofStatus.classList.remove('is-error');
+	if (popup) popup.location.href = whatsappUrl;
+	else window.location.assign(whatsappUrl);
 }
 
 $('[data-checkout-form]').addEventListener('submit', async event => {
@@ -265,29 +257,14 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 	const message = $('[data-form-message]');
 	const proofFile = proofInput.files?.[0];
 	if (orderCreated && createdOrderMessage && proofFile) {
-		if (supportsFileSharing(proofFile)) {
-			try {
-				await navigator.share({ title: 'Pedido Cantinho Potiguar', text: createdOrderMessage, files: [proofFile] });
-				orderShared = true;
-				proofStatus.textContent = 'Pedido compartilhado. Obrigado!';
-			} catch (error) {
-				if (error.name === 'AbortError') proofStatus.textContent = 'Compartilhamento cancelado. Toque no botão para tentar novamente.';
-				else {
-					shareOrderFallback(createdOrderMessage, null);
-					orderShared = true;
-				}
-			}
-		} else {
-			const whatsappWindow = window.open('about:blank', '_blank');
-			shareOrderFallback(createdOrderMessage, whatsappWindow);
-			orderShared = true;
-		}
+		const whatsappWindow = window.open('about:blank', '_blank');
+		openOrderWhatsApp(createdOrderMessage, whatsappWindow);
+		orderShared = true;
 		updateSendOrderButton();
 		return;
 	}
 	if (!proofFile || sendOrderButton.disabled) return;
-	const supportsNativeShare = supportsFileSharing(proofFile);
-	const whatsappWindow = supportsNativeShare ? null : window.open('about:blank', '_blank');
+	const whatsappWindow = window.open('about:blank', '_blank');
 	if (whatsappWindow) whatsappWindow.opener = null;
 	message.textContent = 'Registrando seu pedido...';
 	sendOrderButton.disabled = true;
@@ -307,23 +284,8 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 		message.textContent = `Pedido ${result.order.number ? `#${result.order.number}` : 'registrado'}.`;
 		$('[data-payment-result]').textContent = 'Seu pedido foi registrado e o comprovante foi anexado.';
 		createdOrderMessage = formatCustomerOrderMessage(result.order);
-		if (!supportsNativeShare) {
-			shareOrderFallback(createdOrderMessage, whatsappWindow);
-			orderShared = true;
-			return;
-		}
-		try {
-			await navigator.share({ title: 'Pedido Cantinho Potiguar', text: createdOrderMessage, files: [proofFile] });
-			orderShared = true;
-			proofStatus.textContent = 'Pedido compartilhado. Obrigado!';
-		} catch (error) {
-			if (error.name === 'AbortError') {
-				proofStatus.textContent = 'Compartilhamento cancelado. Toque no botão para tentar novamente.';
-			} else {
-				shareOrderFallback(createdOrderMessage, null);
-				orderShared = true;
-			}
-		}
+		openOrderWhatsApp(createdOrderMessage, whatsappWindow);
+		orderShared = true;
 	} catch (error) {
 		whatsappWindow?.close();
 		message.textContent = error.message;
