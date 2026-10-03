@@ -607,8 +607,21 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
   } catch (error) {
     if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
     if (parsed.data.paymentMethod === 'PIX') {
-      console.error('Erro ao registrar pedido Pix manual:', error);
-      return res.status(500).json({ error: 'Não foi possível registrar o pedido. Confira os dados e tente novamente.' });
+      const requestId = crypto.randomUUID();
+      console.error('Falha no registro Pix', {
+        requestId,
+        endpoint: req.originalUrl,
+        method: req.method,
+        status: 500,
+        contentType: req.get('content-type'),
+        itemCount: parsed.data.items.length,
+        proof: req.file ? { size: req.file.size, mimeType: req.file.mimetype } : null,
+        error: { name: error.name, code: error.code, message: error.message, stack: error.stack }
+      });
+      if (error.message === 'Um ou mais produtos nao estao disponiveis.') {
+        return res.status(409).json({ error: 'Um ou mais produtos do carrinho não estão mais disponíveis. Atualize o cardápio e tente novamente.', requestId });
+      }
+      return res.status(500).json({ error: 'Não foi possível registrar o pedido. Confira os dados e tente novamente.', requestId });
     }
     const safeError = safeMercadoPagoError(error);
     console.error('Mercado Pago HTTP status:', safeError.status || safeError.mercadoPagoStatus || 'unknown');

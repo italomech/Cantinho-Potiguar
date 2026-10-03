@@ -271,9 +271,31 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 		formData.set('paymentMethod', 'PIX');
 		formData.set('items', JSON.stringify(cartItems().map(({ product, quantity }) => ({ productId: product.id, quantity: Number(quantity) }))));
 		formData.append('proof', proofFile, proofFile.name);
-		const response = await apiFetch('/api/orders', { method: 'POST', body: formData });
-		const result = await response.json().catch(() => ({}));
-		if (!response.ok) throw new Error(result.error || 'Confira os dados informados.');
+		const endpoint = '/api/orders';
+		let response;
+		try {
+			response = await apiFetch(endpoint, { method: 'POST', body: formData });
+		} catch (error) {
+			console.error('[POST /api/orders] Requisição não concluída', { endpoint, method: 'POST', message: error.message });
+			throw error;
+		}
+		const responseText = await response.text();
+		let result;
+		try { result = JSON.parse(responseText); }
+		catch { result = { error: responseText || 'Resposta vazia do servidor.' }; }
+		if (!response.ok) {
+			console.error('[POST /api/orders] Falha no registro', { endpoint, method: 'POST', status: response.status, response: result });
+		}
+		if (!response.ok) {
+			const requestError = new Error(result.error || 'Confira os dados informados.');
+			requestError.status = response.status;
+			requestError.response = result;
+			throw requestError;
+		}
+		if (!result.order?.id || !result.order?.pixProofUrl) {
+			console.error('[POST /api/orders] Resposta sem confirmação do pedido ou comprovante', { endpoint, status: response.status, hasOrderId: Boolean(result.order?.id), hasPixProofUrl: Boolean(result.order?.pixProofUrl) });
+			throw new Error('O servidor não confirmou o registro do pedido e do comprovante.');
+		}
 		orderCreated = true;
 		state.cart.clear();
 		renderCart();
@@ -284,6 +306,14 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 		openOrderWhatsApp(createdOrderMessage);
 		orderShared = true;
 	} catch (error) {
+		console.error('[POST /api/orders] Fluxo Pix encerrado sem confirmação', {
+			endpoint: '/api/orders',
+			method: 'POST',
+			status: error.status ?? null,
+			response: error.response ?? null,
+			message: error.message,
+			stack: error.stack
+		});
 		message.textContent = error.message;
 	} finally {
 		updateSendOrderButton();
