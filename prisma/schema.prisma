@@ -15,16 +15,19 @@ model Admin {
 }
 
 model Product {
-  id          String      @id @default(cuid())
-  name        String
-  description String
-  imageUrl    String
-  priceCents  Int
-  costCents   Int?
-  active      Boolean     @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  orderItems  OrderItem[]
+  id             String      @id @default(cuid())
+  name           String
+  description    String
+  imageUrl       String
+  category       String      @default("Geral")
+  priceCents     Int
+  costCents      Int?
+  stock          Int         @default(0)
+  manualSoldOut  Boolean     @default(false)
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  orderItems     OrderItem[]
 }
 
 model Setting {

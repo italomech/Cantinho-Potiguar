@@ -48,6 +48,19 @@ body {
 .admin-form { margin-bottom: 1.5rem; }
 .admin-product { padding: 0.8rem 0; border-top: 1px solid rgba(29, 42, 32, 0.08); }
 .admin-product .btn { padding: 0.5rem 0.8rem; }
+.product-form-actions, .admin-product-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+.product-list { display: grid; gap: 0.65rem; }
+.admin-product { justify-content: flex-start; align-items: center; }
+.admin-product > div { flex: 1; min-width: 0; }
+.admin-product img { width: 64px; height: 64px; flex: 0 0 64px; border-radius: 10px; object-fit: cover; background: var(--bg); }
+.admin-product-actions { margin-left: auto; justify-content: flex-end; }
+.admin-product .btn-danger { color: #8c1c2e; }
+.product-image-label input { padding: 0.5rem; background: var(--bg-soft); }
+.product-image-preview { display: flex; align-items: center; gap: 0.8rem; margin: 0.5rem 0 1rem; color: var(--muted); overflow-wrap: anywhere; }
+.product-image-preview img { width: 88px; height: 88px; border-radius: 12px; object-fit: cover; }
+.product-image-preview[hidden] { display: none; }
+.admin-form input[type="checkbox"] { width: auto; margin: 0; }
+.admin-form .choice { display: flex; align-items: center; gap: 0.55rem; }
 .proof-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 0.8rem; color: var(--muted); font-size: 0.82rem; }
 .mini-link { color: var(--primary); font-weight: 700; }
 .muted { color: var(--muted); }
@@ -477,6 +490,11 @@ img {
 .menu-card {
   overflow: hidden;
 }
+.menu-card.is-sold-out img { filter: grayscale(0.8); opacity: 0.72; }
+.menu-stock { display: inline-block; margin-top: 0.7rem; color: var(--muted); font-size: 0.84rem; font-weight: 600; }
+.menu-stock.is-sold-out { color: #8c1c2e; }
+.validation-message { margin: 0.6rem 0 1rem; color: #8c1c2e; font-weight: 700; }
+.validation-message[hidden] { display: none; }
 
 .menu-card img {
   width: 100%;
@@ -831,4 +849,6 @@ img {
   .menu-card img { height: 220px; }
   .cart-panel { width: min(100%, 420px); padding: 1rem; }
   .btn { width: auto; }
+  .admin-product { align-items: flex-start; flex-wrap: wrap; }
+  .admin-product-actions { width: 100%; margin-left: 0; }
 }

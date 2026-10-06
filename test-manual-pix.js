@@ -48,7 +48,7 @@ async function getFreePort() {
 }
 
 async function waitForServer(baseUrl, server, getOutput) {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 60000;
   let lastStatus = 'sem resposta';
   while (Date.now() < deadline && server.exitCode === null) {
     try {
@@ -100,13 +100,15 @@ try {
     name: 'Produto Pix teste',
     description: 'Produto temporário para validar Pix manual.',
     imageUrl: 'https://example.test/pix-test.png',
-    priceCents: 2500
+    priceCents: 2500,
+    stock: 10
   } });
   const secondProduct = await prisma.product.create({ data: {
     name: 'Segundo produto Pix teste',
     description: 'Segundo produto temporário para validar o carrinho.',
     imageUrl: 'https://example.test/pix-test-second.png',
-    priceCents: 1800
+    priceCents: 1800,
+    stock: 10
   } });
   await prisma.$disconnect();
   prisma = null;

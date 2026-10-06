@@ -63,6 +63,9 @@ O backend consulta produtos, precos e taxa no banco; nunca aceita o total enviad
 - Execute `npm install`, `npm run prisma:generate`, `npm run db:migrate` e `npm run db:seed` no deploy inicial. `migrate deploy` aplica todas as migrações novas sem recriar o banco.
 - Configure dominio, HTTPS, `PUBLIC_URL` e CORS. A chave Pix padrão está no backend; configure `PIX_KEY` no Render apenas se precisar sobrescrevê-la. Configure `PIX_QR_PAYLOAD` somente quando tiver o BR Code real correspondente a essa mesma chave.
 - Para manter comprovantes entre deploys, monte um Persistent Disk no Render e defina `UPLOADS_DIR` para uma pasta dentro do ponto de montagem.
+- As fotos dos produtos usam o mesmo `UPLOADS_DIR` e ficam em `/uploads/`; mantenha o Persistent Disk montado nesse caminho também para que elas continuem disponíveis após novos deploys. Nenhuma variável nova é necessária.
+- A migração `0003_product_inventory` adiciona categoria, estoque e bloqueio manual de esgotado sem alterar pedidos ou demais dados. Produtos existentes recebem estoque inicial `0` por segurança e aparecem como esgotados até que as quantidades reais sejam cadastradas no Admin antes de reabrir as vendas.
+- A criação de pedidos valida bairro e estoque no backend; a baixa do estoque e o registro do pedido ocorrem na mesma transação. Cancelamentos administrativos não alteram automaticamente o estoque.
 - Configure logs, backups, alertas e rotacao das credenciais.
 
 ## O que ainda depende de servico externo

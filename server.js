@@ -67,6 +67,18 @@ const proofUpload = multer({
     callback(new Error('Arquivo não aceito. Envie JPG, JPEG, PNG, WEBP ou PDF.'));
   }
 });
+const productImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, uploadDir),
+    filename: (_req, _file, callback) => callback(null, `product-${crypto.randomUUID()}`)
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    const extension = path.extname(file.originalname || '').toLowerCase();
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype) || (['.jpg', '.jpeg', '.png', '.webp'].includes(extension) && (!file.mimetype || file.mimetype === 'application/octet-stream'))) return callback(null, true);
+    callback(new Error('Envie uma imagem JPG, PNG ou WEBP.'));
+  }
+});
 
 const customerSchema = z.object({
   customerName: z.string().trim().min(2).max(100),
@@ -83,8 +95,15 @@ const customerSchema = z.object({
 const statusSchema = z.object({ status: z.enum(['RECEIVED', 'PAYMENT_PENDING', 'PAID', 'PREPARING', 'OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED']) });
 const cashOpeningDescription = 'Abertura do caixa';
 const productSchema = z.object({
-  name: z.string().trim().min(2).max(100), description: z.string().trim().max(500), imageUrl: z.string().url(),
-  priceCents: z.number().int().min(1).max(100000), costCents: z.number().int().min(0).max(100000).optional(), active: z.boolean().optional().default(true)
+  name: z.string().trim().min(2).max(100),
+  description: z.string().trim().max(500),
+  imageUrl: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
+  category: z.string().trim().min(1).max(60).default('Geral'),
+  priceCents: z.preprocess(value => typeof value === 'string' && value !== '' ? Number(value) : value, z.number().int().min(1).max(100000)),
+  costCents: z.preprocess(value => value === '' || value == null ? undefined : typeof value === 'string' ? Number(value) : value, z.number().int().min(0).max(100000).optional()),
+  stock: z.preprocess(value => typeof value === 'string' && value !== '' ? Number(value) : value, z.number().int().min(0).max(100000)),
+  manualSoldOut: z.preprocess(value => typeof value === 'string' ? value === 'true' : value, z.boolean().default(false)),
+  active: z.preprocess(value => typeof value === 'string' ? value === 'true' : value, z.boolean().default(true))
 });
 const cashMovementSchema = z.object({
   type: z.enum(['ENTRY', 'OUTPUT']),
@@ -160,6 +179,49 @@ function pixKeyFromPayload(payload) {
 function orderPayload(order) {
   return { ...order, subtotal: money(order.subtotalCents), deliveryFee: money(order.deliveryFeeCents), total: money(order.totalCents) };
 }
+class OrderValidationError extends Error {
+  constructor(code, message, status = 409) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
+const unavailableNeighborhoods = ['instabul', 'vertentes'];
+function normalizeBlockedNeighborhood(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9]/g, '');
+}
+function isOneEditAway(left, right) {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (left.length === right.length && left[leftIndex + 1] === right[rightIndex] && left[leftIndex] === right[rightIndex + 1]) {
+      leftIndex += 2;
+      rightIndex += 2;
+    } else if (left.length > right.length) {
+      leftIndex += 1;
+    } else if (right.length > left.length) {
+      rightIndex += 1;
+    } else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+  return edits + (leftIndex < left.length || rightIndex < right.length ? 1 : 0) <= 1;
+}
+function isUnavailableNeighborhood(value) {
+  const normalized = normalizeBlockedNeighborhood(value);
+  return unavailableNeighborhoods.some(neighborhood => isOneEditAway(normalized, neighborhood));
+}
+const unavailableNeighborhoodMessage = '🚫 No momento não realizamos entregas neste bairro. Por favor, escolha outro bairro ou selecione retirada no local.';
 async function manualPixPayment() {
   const pixKey = process.env.PIX_KEY?.trim() || defaultPixKey;
   const pixPayload = process.env.PIX_QR_PAYLOAD?.trim();
@@ -188,13 +250,18 @@ function calculateDeliveryFeeCents(neighborhood, deliveryMethod) {
   const normalizedNeighborhood = normalizeNeighborhood(neighborhood);
   return ['upanema', 'ipanema'].includes(normalizedNeighborhood) ? 500 : 200;
 }
-async function calculateOrder(input) {
-  const products = await prisma.product.findMany({ where: { id: { in: input.items.map(item => item.productId) }, active: true } });
+async function calculateOrder(input, client = prisma) {
+  const quantities = new Map();
+  for (const item of input.items) quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.quantity);
+  if ([...quantities.values()].some(quantity => quantity > 30)) throw new OrderValidationError('INVALID_QUANTITY', 'A quantidade por produto não pode passar de 30.', 400);
+  const products = await client.product.findMany({ where: { id: { in: [...quantities.keys()] }, active: true } });
   const byId = new Map(products.map(product => [product.id, product]));
-  if (products.length !== new Set(input.items.map(item => item.productId)).size) throw new Error('Um ou mais produtos nao estao disponiveis.');
-  const items = input.items.map(item => {
-    const product = byId.get(item.productId);
-    return { productId: product.id, productName: product.name, unitPriceCents: product.priceCents, quantity: item.quantity };
+  if (products.length !== quantities.size) throw new OrderValidationError('PRODUCT_UNAVAILABLE', 'Um ou mais produtos não estão disponíveis.');
+  const items = [...quantities.entries()].map(([productId, quantity]) => {
+    const product = byId.get(productId);
+    if (product.manualSoldOut) throw new OrderValidationError('PRODUCT_UNAVAILABLE', `${product.name} está esgotado.`);
+    if (product.stock < quantity) throw new OrderValidationError('INSUFFICIENT_STOCK', `Estoque insuficiente para ${product.name}. Disponível: ${product.stock}.`);
+    return { productId: product.id, productName: product.name, unitPriceCents: product.priceCents, quantity };
   });
   const subtotalCents = items.reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0);
   const deliveryFeeCents = calculateDeliveryFeeCents(input.neighborhood, input.deliveryMethod);
@@ -479,6 +546,49 @@ function handleProofUpload(req, res, next) {
   });
 }
 
+function handleProductImageUpload(req, res, next) {
+  productImageUpload.single('image')(req, res, error => {
+    if (!error) return next();
+    if (error.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'A foto deve ter no máximo 5 MB.' });
+    console.error('Upload da foto do produto:', error);
+    return res.status(400).json({ error: 'Envie uma imagem JPG, PNG ou WEBP de até 5 MB.' });
+  });
+}
+
+function identifyProductImageType(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return '.jpg';
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return '.png';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return '.webp';
+  return null;
+}
+
+async function persistProductImage(file) {
+  const extension = identifyProductImageType(await fs.promises.readFile(file.path));
+  if (!extension) throw new OrderValidationError('INVALID_PRODUCT_IMAGE', 'O arquivo não é uma imagem JPG, PNG ou WEBP válida.', 400);
+  const filename = `${file.filename}${extension}`;
+  const savedPath = path.join(uploadDir, filename);
+  await fs.promises.rename(file.path, savedPath);
+  file.path = savedPath;
+  return `/uploads/${filename}`;
+}
+
+function managedProductImagePath(imageUrl) {
+  const filename = path.basename(String(imageUrl || ''));
+  return /^product-[\da-f-]{36}\.(jpg|png|webp)$/i.test(filename) ? path.join(uploadDir, filename) : null;
+}
+
+async function removeUnusedProductImage(imageUrl) {
+  const oldPath = managedProductImagePath(imageUrl);
+  if (!oldPath) return;
+  const stillUsed = await prisma.product.findFirst({ where: { imageUrl } });
+  if (stillUsed) return;
+  try {
+    await fs.promises.unlink(oldPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('Não foi possível remover uma foto antiga do produto:', error);
+  }
+}
+
 function identifyProofType(buffer) {
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return { mime: 'image/jpeg', extension: '.jpg' };
   if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', extension: '.png' };
@@ -550,6 +660,11 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
       proofPath = null;
       return res.status(400).json({ error: 'Informe o endereco completo para entrega.' });
     }
+    if (input.deliveryMethod === 'DELIVERY' && isUnavailableNeighborhood(input.neighborhood)) {
+      if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+      proofPath = null;
+      return res.status(400).json({ error: unavailableNeighborhoodMessage });
+    }
     let pixPayment = null;
     let proofType = null;
     if (input.paymentMethod === 'PIX') {
@@ -571,7 +686,6 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
       proofPath = null;
       return res.status(400).json({ error: 'O comprovante só pode ser enviado com pagamento Pix.' });
     }
-    const calculated = await calculateOrder(input);
     let pixProofUrl = null;
     if (proofType) {
       const safeFilename = `${req.file.filename}${proofType.extension}`;
@@ -580,15 +694,25 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
       proofPath = safeProofPath;
       pixProofUrl = `/uploads/${safeFilename}`;
     }
-    const order = await prisma.order.create({ data: {
-      customerName: input.customerName, phone: input.phone, deliveryMethod: input.deliveryMethod,
-      address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,
-      neighborhood: input.neighborhood || null, reference: input.reference || null, paymentMethod: input.paymentMethod,
-      subtotalCents: calculated.subtotalCents, deliveryFeeCents: calculated.deliveryFeeCents, totalCents: calculated.totalCents,
-      ...(input.paymentMethod === 'PIX' ? { orderStatus: 'PAYMENT_PENDING' } : {}),
-      ...(proofType ? { pixProofUrl, pixProofMime: proofType.mime, pixProofStatus: 'SENT', pixProofUploadedAt: new Date() } : {}),
-      items: { create: calculated.items }
-    }, include: { items: true } });
+    const order = await prisma.$transaction(async transaction => {
+      const calculated = await calculateOrder(input, transaction);
+      for (const item of calculated.items) {
+        const updated = await transaction.product.updateMany({
+          where: { id: item.productId, active: true, manualSoldOut: false, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } }
+        });
+        if (updated.count !== 1) throw new OrderValidationError('INSUFFICIENT_STOCK', `Estoque insuficiente para ${item.productName}. Atualize o cardápio e tente novamente.`);
+      }
+      return transaction.order.create({ data: {
+        customerName: input.customerName, phone: input.phone, deliveryMethod: input.deliveryMethod,
+        address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,
+        neighborhood: input.neighborhood || null, reference: input.reference || null, paymentMethod: input.paymentMethod,
+        subtotalCents: calculated.subtotalCents, deliveryFeeCents: calculated.deliveryFeeCents, totalCents: calculated.totalCents,
+        ...(input.paymentMethod === 'PIX' ? { orderStatus: 'PAYMENT_PENDING' } : {}),
+        ...(proofType ? { pixProofUrl, pixProofMime: proofType.mime, pixProofStatus: 'SENT', pixProofUploadedAt: new Date() } : {}),
+        items: { create: calculated.items }
+      }, include: { items: true } });
+    });
     proofPath = null;
 
     if (input.paymentMethod === 'PIX') {
@@ -606,6 +730,7 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     return res.status(201).json({ order: orderPayload(savedOrder), payment: { configured: true, type: 'CARD', preferenceId: payment.id, checkoutUrl, mode: mercadoPagoMode } });
   } catch (error) {
     if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+    if (error instanceof OrderValidationError) return res.status(error.status).json({ error: error.message });
     if (parsed.data.paymentMethod === 'PIX') {
       const requestId = crypto.randomUUID();
       console.error('Falha no registro Pix', {
@@ -618,9 +743,6 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
         proof: req.file ? { size: req.file.size, mimeType: req.file.mimetype } : null,
         error: { name: error.name, code: error.code, message: error.message, stack: error.stack }
       });
-      if (error.message === 'Um ou mais produtos nao estao disponiveis.') {
-        return res.status(409).json({ error: 'Um ou mais produtos do carrinho não estão mais disponíveis. Atualize o cardápio e tente novamente.', requestId });
-      }
       return res.status(500).json({ error: 'Não foi possível registrar o pedido. Confira os dados e tente novamente.', requestId });
     }
     const safeError = safeMercadoPagoError(error);
@@ -787,15 +909,48 @@ app.patch('/api/admin/orders/:id/proof-status', requireAdmin, async (req, res) =
   res.json(orderPayload(updated));
 });
 app.get('/api/admin/products', requireAdmin, async (_req, res) => res.json(await prisma.product.findMany({ orderBy: { createdAt: 'asc' } })));
-app.post('/api/admin/products', requireAdmin, async (req, res) => {
-  const parsed = productSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Dados do produto invalidos.' });
-  res.status(201).json(await prisma.product.create({ data: parsed.data }));
-});
-app.patch('/api/admin/products/:id', requireAdmin, async (req, res) => {
-  const parsed = productSchema.partial().safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Dados do produto invalidos.' });
-  res.json(await prisma.product.update({ where: { id: req.params.id }, data: parsed.data }));
+async function saveAdminProduct(req, res, create) {
+  let imageUrl = null;
+  let uncommittedImageUrl = null;
+  const temporaryUploadPath = req.file?.path;
+  try {
+    const existing = create ? null : await prisma.product.findUnique({ where: { id: req.params.id } });
+    if (!create && !existing) return res.status(404).json({ error: 'Produto não encontrado.' });
+    const parsed = (create ? productSchema : productSchema.partial()).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Confira os dados do produto.', details: parsed.error.flatten() });
+    if (req.file) {
+      imageUrl = await persistProductImage(req.file);
+      uncommittedImageUrl = imageUrl;
+    }
+    else imageUrl = parsed.data.imageUrl || existing?.imageUrl || null;
+    if (!imageUrl) return res.status(400).json({ error: 'Selecione uma foto para o novo produto.' });
+    const data = { ...parsed.data, imageUrl };
+    const product = create
+      ? await prisma.product.create({ data })
+      : await prisma.product.update({ where: { id: existing.id }, data });
+    uncommittedImageUrl = null;
+    if (!create && existing.imageUrl !== product.imageUrl) await removeUnusedProductImage(existing.imageUrl);
+    return res.status(create ? 201 : 200).json(product);
+  } catch (error) {
+    if (uncommittedImageUrl) await removeUnusedProductImage(uncommittedImageUrl);
+    if (error instanceof OrderValidationError && error.code === 'INVALID_PRODUCT_IMAGE') return res.status(400).json({ error: error.message });
+    throw error;
+  } finally {
+    if (temporaryUploadPath) {
+      try { await fs.promises.unlink(temporaryUploadPath); }
+      catch (error) { if (error.code !== 'ENOENT') console.error('Não foi possível limpar o upload temporário do produto:', error); }
+    }
+  }
+}
+app.post('/api/admin/products', requireAdmin, handleProductImageUpload, (req, res) => saveAdminProduct(req, res, true));
+app.patch('/api/admin/products/:id', requireAdmin, handleProductImageUpload, (req, res) => saveAdminProduct(req, res, false));
+app.delete('/api/admin/products/:id', requireAdmin, async (req, res) => {
+  const product = await prisma.product.findUnique({ where: { id: req.params.id }, include: { _count: { select: { orderItems: true } } } });
+  if (!product) return res.status(404).json({ error: 'Produto não encontrado.' });
+  if (product._count.orderItems) return res.status(409).json({ error: 'Este produto já faz parte de pedidos. Desative-o em vez de excluir para preservar o histórico.' });
+  await prisma.product.delete({ where: { id: product.id } });
+  await removeUnusedProductImage(product.imageUrl);
+  res.sendStatus(204);
 });
 app.get('/api/admin/settings', requireAdmin, async (_req, res) => res.json(await prisma.setting.findUnique({ where: { id: 'main' } })));
 app.patch('/api/admin/settings', requireAdmin, async (req, res) => {

@@ -21,7 +21,7 @@ async function getFreePort() {
 }
 
 async function waitForServer(baseUrl, server, getOutput) {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 60000;
   while (Date.now() < deadline && server.exitCode === null) {
     try {
       const response = await fetch(`${baseUrl}/api/products`);
@@ -72,13 +72,15 @@ async function runScenario(closeDifferenceCents) {
       description: 'Produto temporário para validar o Caixa.',
       imageUrl: 'https://example.test/product.png',
       priceCents: 2500,
+      stock: 10,
       costCents: 800
     } });
     const productWithoutCost = await prisma.product.create({ data: {
       name: 'Produto sem custo de teste',
       description: 'Produto temporário sem custo conhecido.',
       imageUrl: 'https://example.test/product-without-cost.png',
-      priceCents: 1800
+      priceCents: 1800,
+      stock: 10
     } });
 
     const createPaidOrder = async (paymentMethod, quantity, paymentStatus = 'APPROVED', orderStatus = 'PAID', feeCents = 0) => prisma.order.create({

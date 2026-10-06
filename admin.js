@@ -7,10 +7,16 @@ let currentCashPeriod = 'today';
 let currentCashExpectedCents = 0;
 
 async function request(url, options = {}) {
-  const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+  const headers = { ...(options.headers || {}) };
+  if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+  const response = await fetch(url, { ...options, headers });
   const body = response.status === 204 ? null : await response.json();
   if (!response.ok) throw new Error(body?.error || 'Não foi possível concluir a operação.');
   return body;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
 function showAdmin() {
@@ -43,7 +49,10 @@ async function refresh() {
 
 async function renderProducts() {
   const products = await request('/api/admin/products');
-  $('[data-products]').innerHTML = products.map(product => `<div class="admin-product"><div><strong>${product.name}</strong><span>${money(product.priceCents)} · ${product.active ? 'Ativo' : 'Inativo'} · ${product.costCents != null ? `Custo: ${money(product.costCents)}` : 'Custo não informado'}</span></div><button class="btn btn-secondary" data-edit-product="${product.id}">Editar</button></div>`).join('');
+  $('[data-products]').innerHTML = products.map(product => {
+    const status = !product.active ? 'Inativo' : product.manualSoldOut ? 'Esgotado manualmente' : product.stock === 0 ? 'Esgotado · estoque zero' : `Disponível · ${product.stock} em estoque`;
+    return `<article class="admin-product"><img src="${escapeHtml(product.imageUrl)}" alt="" /><div><strong>${escapeHtml(product.name)}</strong><span>${escapeHtml(product.category)} · ${money(product.priceCents)} · ${status}</span><span>${product.costCents != null ? `Custo: ${money(product.costCents)}` : 'Custo não informado'}</span></div><div class="admin-product-actions"><button class="btn btn-secondary" type="button" data-edit-product="${escapeHtml(product.id)}">Editar</button><button class="btn btn-secondary btn-danger" type="button" data-delete-product="${escapeHtml(product.id)}">Excluir</button></div></article>`;
+  }).join('') || '<p>Nenhum produto cadastrado.</p>';
 }
 
 function updateCashDifference(expectedCents) {
@@ -130,31 +139,94 @@ document.addEventListener('change', async event => {
   } catch (error) { alert(error.message); }
 });
 
-$('[data-product-form]').addEventListener('submit', async event => {
+const productForm = $('[data-product-form]');
+const productFileInput = $('[data-product-file]');
+let productPreviewUrl = null;
+
+function setProductPreview(source, name, isObjectUrl = false) {
+  if (productPreviewUrl) URL.revokeObjectURL(productPreviewUrl);
+  productPreviewUrl = isObjectUrl ? source : null;
+  const preview = $('[data-product-preview]');
+  preview.hidden = !source;
+  $('[data-product-preview-image]').src = source || '';
+  $('[data-product-image-name]').textContent = name || '';
+}
+
+function clearProductForm() {
+  productForm.reset();
+  productForm.elements.id.value = '';
+  productFileInput.setCustomValidity('');
+  setProductPreview('', '');
+}
+
+productFileInput.addEventListener('change', () => {
+  const file = productFileInput.files?.[0];
+  productFileInput.setCustomValidity('');
+  if (!file) {
+    setProductPreview('', '');
+    return;
+  }
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+    productFileInput.setCustomValidity('Selecione uma imagem JPG, PNG ou WEBP de até 5 MB.');
+    productFileInput.reportValidity();
+    productFileInput.value = '';
+    setProductPreview('', '');
+    return;
+  }
+  setProductPreview(URL.createObjectURL(file), `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`, true);
+});
+
+productForm.addEventListener('submit', async event => {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
-  data.priceCents = Number(data.priceCents);
-  data.costCents = data.costCents ? Number(data.costCents) : null;
-  data.active = event.currentTarget.active.checked;
-  const id = data.id;
-  delete data.id;
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const id = form.elements.id.value;
+  data.delete('id');
+  data.set('active', String(form.elements.active.checked));
+  data.set('manualSoldOut', String(form.elements.manualSoldOut.checked));
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
   try {
-    await request(id ? `/api/admin/products/${id}` : '/api/admin/products', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(data) });
+    await request(id ? `/api/admin/products/${id}` : '/api/admin/products', { method: id ? 'PATCH' : 'POST', body: data });
     $('[data-product-message]').textContent = 'Produto salvo.';
-    event.currentTarget.reset();
+    clearProductForm();
     await renderProducts();
   } catch (error) {
     $('[data-product-message]').textContent = error.message;
+  } finally {
+    submit.disabled = false;
   }
 });
-$('[data-clear-product]').addEventListener('click', () => $('[data-product-form]').reset());
+$('[data-clear-product]').addEventListener('click', clearProductForm);
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-edit-product]');
   if (button) {
-    const product = (await request('/api/admin/products')).find(item => item.id === button.dataset.editProduct);
-    for (const [key, value] of Object.entries(product)) {
-      const field = $('[data-product-form]').elements[key];
-      if (field) field.type === 'checkbox' ? field.checked = value : field.value = value;
+    try {
+      const product = (await request('/api/admin/products')).find(item => item.id === button.dataset.editProduct);
+      if (!product) throw new Error('Produto não encontrado.');
+      clearProductForm();
+      for (const [key, value] of Object.entries(product)) {
+        const field = productForm.elements[key];
+        if (field && field.type !== 'file') field.type === 'checkbox' ? field.checked = value : field.value = value;
+      }
+      setProductPreview(product.imageUrl, 'Foto atual');
+      productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (error) {
+      $('[data-product-message]').textContent = error.message;
+    }
+    return;
+  }
+
+  const deleteButton = event.target.closest('[data-delete-product]');
+  if (deleteButton) {
+    const productId = deleteButton.dataset.deleteProduct;
+    if (!confirm('Excluir este produto? Produtos que já aparecem em pedidos precisam ser desativados para preservar o histórico.')) return;
+    try {
+      await request(`/api/admin/products/${productId}`, { method: 'DELETE' });
+      $('[data-product-message]').textContent = 'Produto excluído.';
+      await renderProducts();
+    } catch (error) {
+      $('[data-product-message]').textContent = error.message;
     }
     return;
   }

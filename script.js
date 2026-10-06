@@ -11,6 +11,32 @@ const apiBase = window.CANTINHO_API_BASE || '';
 const orderWhatsAppNumber = '558498115276';
 const mobileMenuToggle = $('[data-mobile-menu-toggle]');
 const mainMenu = $('[data-main-menu]');
+const productGrid = $('[data-menu-products]');
+const staticMenuCards = [...productGrid.querySelectorAll('.menu-card:not([data-product-id])')].map(card => card.outerHTML).join('');
+
+function escapeHtml(value) {
+	return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
+function productIsAvailable(product) {
+	return product.active !== false && !product.manualSoldOut && Number(product.stock) > 0;
+}
+
+function renderMenu() {
+	productGrid.innerHTML = state.products.map(product => {
+		const available = productIsAvailable(product);
+		const stockLabel = available ? `${product.stock} em estoque` : 'ESGOTADO';
+		return `<article class="menu-card${available ? '' : ' is-sold-out'}" data-product-id="${escapeHtml(product.id)}">
+			<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />
+			<div class="menu-body">
+				<div class="menu-header"><h3>${escapeHtml(product.name)}</h3><span>${money(product.price)}</span></div>
+				<p>${escapeHtml(product.description)}</p>
+				<span class="menu-stock${available ? '' : ' is-sold-out'}">${stockLabel}</span>
+				<button class="btn btn-primary add-to-cart" type="button" data-product-id="${escapeHtml(product.id)}"${available ? '' : ' disabled'}>${available ? 'Adicionar' : 'Esgotado'}</button>
+			</div>
+		</article>`;
+	}).join('') + staticMenuCards;
+}
 
 function setMobileMenuOpen(isOpen) {
 	mainMenu.classList.toggle('is-open', isOpen);
@@ -42,17 +68,8 @@ async function loadCatalog() {
 	const productsResponse = await apiFetch('/api/products');
 	if (!productsResponse.ok) throw new Error('Não foi possível carregar o cardápio.');
 	state.products = (await productsResponse.json()).map(product => ({ ...product, id: String(product.id), price: parsePrice(product.price ?? Number(product.priceCents) / 100) }));
-	const aliases = { 'creme-de-frango': 'Creme de Frango', panqueca: 'Panqueca', strogonoff: 'Strogonoff', lasanha: 'Lasanha', 'escondidinho-de-carne': 'Escondidinho de Carne' };
-	for (const [slug, name] of Object.entries(aliases)) {
-		const product = state.products.find(item => item.name === name);
-		const card = document.querySelector(`.menu-card[data-product-id="${slug}"]`);
-		if (!product && card) { card.hidden = true; continue; }
-		if (card) {
-			card.dataset.productId = product.id;
-			card.querySelector('.menu-header span').textContent = money(product.price);
-			card.querySelector('.add-to-cart').dataset.productId = product.id;
-		}
-	}
+	renderMenu();
+	renderCart();
 }
 
 async function loadPixSettings() {
@@ -74,6 +91,47 @@ async function loadPixSettings() {
 
 function cartItems() { return [...state.cart.entries()].map(([productId, quantity]) => ({ product: state.products.find(item => String(item.id) === String(productId)), quantity })).filter(item => item.product); }
 function normalizeNeighborhood(value) { return String(value || '').trim().toLocaleLowerCase('pt-BR'); }
+function normalizeBlockedNeighborhood(value) {
+	return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9]/g, '');
+}
+function isOneEditAway(left, right) {
+	if (Math.abs(left.length - right.length) > 1) return false;
+	let leftIndex = 0;
+	let rightIndex = 0;
+	let edits = 0;
+	while (leftIndex < left.length && rightIndex < right.length) {
+		if (left[leftIndex] === right[rightIndex]) {
+			leftIndex += 1;
+			rightIndex += 1;
+			continue;
+		}
+		edits += 1;
+		if (edits > 1) return false;
+		if (left.length === right.length && left[leftIndex + 1] === right[rightIndex] && left[leftIndex] === right[rightIndex + 1]) {
+			leftIndex += 2;
+			rightIndex += 2;
+		} else if (left.length > right.length) leftIndex += 1;
+		else if (right.length > left.length) rightIndex += 1;
+		else {
+			leftIndex += 1;
+			rightIndex += 1;
+		}
+	}
+	return edits + (leftIndex < left.length || rightIndex < right.length ? 1 : 0) <= 1;
+}
+function isUnavailableNeighborhood(value) {
+	const normalized = normalizeBlockedNeighborhood(value);
+	return ['instabul', 'vertentes'].some(neighborhood => isOneEditAway(normalized, neighborhood));
+}
+function updateNeighborhoodValidation() {
+	const method = document.querySelector('input[name="deliveryMethod"]:checked')?.value;
+	const neighborhood = document.querySelector('input[name="neighborhood"]')?.value;
+	const blocked = method === 'DELIVERY' && isUnavailableNeighborhood(neighborhood);
+	const warning = $('[data-neighborhood-message]');
+	warning.hidden = !blocked;
+	updateSendOrderButton();
+	return blocked;
+}
 function calculateDeliveryFee(neighborhood, deliveryMethod) {
 	if (deliveryMethod === 'PICKUP') return 0;
 	return ['upanema', 'ipanema'].includes(normalizeNeighborhood(neighborhood)) ? 5 : 2;
@@ -88,7 +146,7 @@ function totals() {
 function renderCart() {
 	const items = cartItems();
 	$('[data-cart-count]').textContent = items.reduce((total, item) => total + item.quantity, 0);
-	$('[data-cart-items]').innerHTML = items.length ? items.map(({ product, quantity }) => `<div class="cart-item"><div><strong>${product.name}</strong><span>${money(product.price)} cada</span></div><div class="quantity"><button type="button" data-decrease="${product.id}">-</button><b>${quantity}</b><button type="button" data-increase="${product.id}">+</button><button class="remove" type="button" data-remove="${product.id}" aria-label="Remover ${product.name}">&times;</button></div></div>`).join('') : '<p class="empty-cart">Seu carrinho está vazio.</p>';
+	$('[data-cart-items]').innerHTML = items.length ? items.map(({ product, quantity }) => `<div class="cart-item"><div><strong>${escapeHtml(product.name)}</strong><span>${money(product.price)} cada · ${product.stock} em estoque</span></div><div class="quantity"><button type="button" data-decrease="${escapeHtml(product.id)}" aria-label="Diminuir quantidade de ${escapeHtml(product.name)}">-</button><b>${quantity}</b><button type="button" data-increase="${escapeHtml(product.id)}" aria-label="Aumentar quantidade de ${escapeHtml(product.name)}"${!productIsAvailable(product) || quantity >= product.stock ? ' disabled' : ''}>+</button><button class="remove" type="button" data-remove="${escapeHtml(product.id)}" aria-label="Remover ${escapeHtml(product.name)}">&times;</button></div></div>`).join('') : '<p class="empty-cart">Seu carrinho está vazio.</p>';
 	const summary = totals();
 	$('[data-cart-subtotal]').textContent = money(summary.subtotal);
 	$('[data-cart-delivery]').textContent = money(summary.delivery);
@@ -97,8 +155,22 @@ function renderCart() {
 	$('[data-checkout-subtotal]').textContent = money(summary.subtotal);
 	$('[data-checkout-delivery]').textContent = money(summary.delivery);
 	$('[data-checkout-total]').textContent = money(summary.total);
+	updateNeighborhoodValidation();
 }
-function changeCart(productId, delta) { const normalizedProductId = String(productId); const next = (state.cart.get(normalizedProductId) || 0) + delta; next > 0 ? state.cart.set(normalizedProductId, next) : state.cart.delete(normalizedProductId); renderCart(); }
+function changeCart(productId, delta) {
+	const normalizedProductId = String(productId);
+	const product = state.products.find(item => String(item.id) === normalizedProductId);
+	if (!product) return false;
+	const next = (state.cart.get(normalizedProductId) || 0) + delta;
+	if (delta > 0 && (!productIsAvailable(product) || next > product.stock)) {
+		$('[data-form-message]').textContent = product.manualSoldOut || product.stock === 0 ? 'Este produto está esgotado.' : `Estoque disponível: ${product.stock} unidade(s).`;
+		return false;
+	}
+	if (next > 0) state.cart.set(normalizedProductId, next);
+	else state.cart.delete(normalizedProductId);
+	renderCart();
+	return true;
+}
 function openCart() { $('[data-cart-panel]').classList.add('is-open'); $('.overlay').classList.add('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'false'); }
 function closeCart() { $('[data-cart-panel]').classList.remove('is-open'); $('.overlay').classList.remove('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'true'); }
 
@@ -121,7 +193,7 @@ function renderPixPayment() {
 }
 document.addEventListener('click', event => {
 	const add = event.target.closest('.add-to-cart');
-	if (add?.dataset.productId) { changeCart(add.dataset.productId, 1); openCart(); }
+	if (add?.dataset.productId && changeCart(add.dataset.productId, 1)) openCart();
 	if (event.target.closest('[data-open-cart]')) openCart();
 	if (event.target.closest('[data-close-cart]')) closeCart();
 	const increase = event.target.closest('[data-increase]'); if (increase) changeCart(increase.dataset.increase, 1);
@@ -156,7 +228,11 @@ function isSupportedProof(file) {
 
 function updateSendOrderButton() {
 	const file = proofInput.files?.[0];
-	sendOrderButton.disabled = orderShared || (!orderCreated && (!state.pixPayment?.configured || !file || file.size > maxProofSize || !isSupportedProof(file)));
+	const method = document.querySelector('input[name="deliveryMethod"]:checked')?.value;
+	const neighborhood = document.querySelector('input[name="neighborhood"]')?.value;
+	const blockedNeighborhood = method === 'DELIVERY' && isUnavailableNeighborhood(neighborhood);
+	const unavailableProduct = cartItems().some(({ product, quantity }) => !productIsAvailable(product) || quantity > product.stock);
+	sendOrderButton.disabled = orderShared || (!orderCreated && (!state.pixPayment?.configured || !file || file.size > maxProofSize || !isSupportedProof(file) || blockedNeighborhood || unavailableProduct));
 }
 
 function clearProofPreview() {
@@ -297,7 +373,9 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 			throw new Error('O servidor não confirmou o registro do pedido e do comprovante.');
 		}
 		orderCreated = true;
+		for (const { product, quantity } of cartItems()) product.stock -= quantity;
 		state.cart.clear();
+		renderMenu();
 		renderCart();
 		proofInput.disabled = true;
 		message.textContent = `Pedido ${result.order.number ? `#${result.order.number}` : 'registrado'}.`;

@@ -13,6 +13,7 @@
     "db:seed": "npm run seed",
     "prisma:generate": "prisma generate",
     "test:pix": "node test-manual-pix.js",
+    "test:inventory": "node test-inventory-delivery.js",
     "test:pix:mercadopago:legacy": "node test-mercadopago-pix.js",
     "test:status": "node test-mercadopago-status.js",
     "test:whatsapp": "node test-whatsapp.js",

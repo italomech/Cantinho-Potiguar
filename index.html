@@ -94,7 +94,7 @@
             <h2>Sabores que fazem você voltar</h2>
           </div>
 
-          <div class="menu-grid">
+          <div class="menu-grid" data-menu-products>
             <article class="menu-card" data-product-id="creme-de-frango">
               <img src="https://www.receitasja.com.br/wp-content/uploads/2025/06/Creme-de-galinha-com-mandioquinha-1140x597.jpg" alt="Creme de frango" />
               <div class="menu-body">
@@ -264,6 +264,7 @@
           <label>WhatsApp<input name="phone" required autocomplete="tel" /></label>
           <fieldset><legend>Forma de entrega</legend><label class="choice"><input type="radio" name="deliveryMethod" value="DELIVERY" checked /> Entrega</label><label class="choice"><input type="radio" name="deliveryMethod" value="PICKUP" /> Retirada no local</label></fieldset>
           <div class="address-fields" data-address-fields><label>Endereço<input name="address" autocomplete="street-address" /></label><div class="form-row"><label>Número<input name="addressNumber" /></label><label>Bairro<input name="neighborhood" /></label></div><label>Complemento<input name="complement" /></label><label>Ponto de referência<input name="reference" /></label></div>
+          <p class="validation-message" data-neighborhood-message aria-live="assertive" hidden>🚫 No momento não realizamos entregas neste bairro. Por favor, escolha outro bairro ou selecione retirada no local.</p>
           <input type="hidden" name="paymentMethod" value="PIX" />
           <section class="pix-payment" aria-labelledby="pix-payment-title">
             <h3 id="pix-payment-title">Pague via PIX</h3>

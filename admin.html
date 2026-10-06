@@ -11,7 +11,36 @@
     <section class="admin-content" data-admin-content hidden>
       <div class="admin-toolbar"><div><h2>Pedidos</h2><p>Atualização automática a cada 15 segundos.</p></div><button class="btn btn-primary" data-refresh>Atualizar agora</button></div>
       <div class="order-list" data-orders></div>
-      <div class="admin-grid"><section><h2>Produtos</h2><form class="admin-form" data-product-form><input type="hidden" name="id" /><label>Nome<input name="name" required /></label><label>Descrição<textarea name="description" required></textarea></label><label>Imagem (URL)<input name="imageUrl" type="url" required /></label><label>Preço em centavos<input name="priceCents" type="number" min="1" required /></label><label>Custo do produto em centavos<input name="costCents" type="number" min="0" /></label><label class="choice"><input name="active" type="checkbox" checked /> Ativo</label><button class="btn btn-primary" type="submit">Salvar produto</button><button class="btn btn-secondary" type="button" data-clear-product>Limpar</button><p class="form-message" data-product-message></p></form><div data-products></div></section><section><h2>Configurações</h2><form class="admin-form" data-settings-form><label>Taxa de entrega em centavos<input name="deliveryFeeCents" type="number" min="0" required /></label><button class="btn btn-primary" type="submit">Salvar taxa</button><p class="form-message" data-settings-message></p></form></section></div>
+      <div class="admin-grid">
+        <section class="product-management">
+          <h2>Gerenciar produtos</h2>
+          <form class="admin-form" data-product-form>
+            <input type="hidden" name="id" />
+            <label>Nome<input name="name" maxlength="100" required /></label>
+            <label>Descrição<textarea name="description" maxlength="500" required></textarea></label>
+            <label>Categoria<input name="category" maxlength="60" placeholder="Ex.: Marmitas" required /></label>
+            <label>Preço em centavos<input name="priceCents" type="number" min="1" max="100000" required /></label>
+            <label>Custo do produto em centavos<input name="costCents" type="number" min="0" max="100000" /></label>
+            <label>Quantidade em estoque<input name="stock" type="number" min="0" max="100000" required /></label>
+            <label class="product-image-label">Foto do produto
+              <input name="image" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" data-product-file />
+            </label>
+            <div class="product-image-preview" data-product-preview hidden>
+              <img data-product-preview-image alt="Prévia da foto do produto" />
+              <span data-product-image-name></span>
+            </div>
+            <label class="choice"><input name="active" type="checkbox" checked /> Ativo no cardápio</label>
+            <label class="choice"><input name="manualSoldOut" type="checkbox" /> Marcar manualmente como esgotado</label>
+            <div class="product-form-actions">
+              <button class="btn btn-primary" type="submit">Salvar produto</button>
+              <button class="btn btn-secondary" type="button" data-clear-product>Limpar</button>
+            </div>
+            <p class="form-message" data-product-message aria-live="polite"></p>
+          </form>
+          <div class="product-list" data-products></div>
+        </section>
+        <section><h2>Configurações</h2><form class="admin-form" data-settings-form><label>Taxa de entrega em centavos<input name="deliveryFeeCents" type="number" min="0" required /></label><button class="btn btn-primary" type="submit">Salvar taxa</button><p class="form-message" data-settings-message></p></form></section>
+      </div>
       <section class="cash-panel">
         <div class="admin-toolbar"><div><h2>Caixa</h2><p>Resumo financeiro do período selecionado.</p></div><button class="btn btn-primary" data-cash-refresh>Atualizar caixa</button></div>
         <div class="cash-filters" aria-label="Filtros do caixa">
