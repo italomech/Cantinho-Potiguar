@@ -100,15 +100,13 @@ try {
     name: 'Produto Pix teste',
     description: 'Produto temporário para validar Pix manual.',
     imageUrl: 'https://example.test/pix-test.png',
-    priceCents: 2500,
-    stock: 10
+    priceCents: 2500
   } });
   const secondProduct = await prisma.product.create({ data: {
     name: 'Segundo produto Pix teste',
     description: 'Segundo produto temporário para validar o carrinho.',
     imageUrl: 'https://example.test/pix-test-second.png',
-    priceCents: 1800,
-    stock: 10
+    priceCents: 1800
   } });
   await prisma.$disconnect();
   prisma = null;

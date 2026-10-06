@@ -101,7 +101,7 @@ const productSchema = z.object({
   category: z.string().trim().min(1).max(60).default('Geral'),
   priceCents: z.preprocess(value => typeof value === 'string' && value !== '' ? Number(value) : value, z.number().int().min(1).max(100000)),
   costCents: z.preprocess(value => value === '' || value == null ? undefined : typeof value === 'string' ? Number(value) : value, z.number().int().min(0).max(100000).optional()),
-  stock: z.preprocess(value => typeof value === 'string' && value !== '' ? Number(value) : value, z.number().int().min(0).max(100000)),
+  stock: z.preprocess(value => value === '' || value == null ? undefined : typeof value === 'string' ? Number(value) : value, z.number().int().min(0).max(100000).default(0)),
   manualSoldOut: z.preprocess(value => typeof value === 'string' ? value === 'true' : value, z.boolean().default(false)),
   active: z.preprocess(value => typeof value === 'string' ? value === 'true' : value, z.boolean().default(true))
 });
@@ -260,7 +260,6 @@ async function calculateOrder(input, client = prisma) {
   const items = [...quantities.entries()].map(([productId, quantity]) => {
     const product = byId.get(productId);
     if (product.manualSoldOut) throw new OrderValidationError('PRODUCT_UNAVAILABLE', `${product.name} está esgotado.`);
-    if (product.stock < quantity) throw new OrderValidationError('INSUFFICIENT_STOCK', `Estoque insuficiente para ${product.name}. Disponível: ${product.stock}.`);
     return { productId: product.id, productName: product.name, unitPriceCents: product.priceCents, quantity };
   });
   const subtotalCents = items.reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0);
@@ -696,13 +695,6 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     }
     const order = await prisma.$transaction(async transaction => {
       const calculated = await calculateOrder(input, transaction);
-      for (const item of calculated.items) {
-        const updated = await transaction.product.updateMany({
-          where: { id: item.productId, active: true, manualSoldOut: false, stock: { gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } }
-        });
-        if (updated.count !== 1) throw new OrderValidationError('INSUFFICIENT_STOCK', `Estoque insuficiente para ${item.productName}. Atualize o cardápio e tente novamente.`);
-      }
       return transaction.order.create({ data: {
         customerName: input.customerName, phone: input.phone, deliveryMethod: input.deliveryMethod,
         address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,

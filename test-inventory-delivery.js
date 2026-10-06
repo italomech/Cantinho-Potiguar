@@ -95,14 +95,13 @@ try {
   form.set('category', 'Marmitas');
   form.set('priceCents', '2500');
   form.set('costCents', '800');
-  form.set('stock', '10');
   form.set('active', 'true');
   form.set('manualSoldOut', 'false');
   form.set('image', new Blob([imageBytes], { type: 'image/png' }), 'marmita.png');
   const createResponse = await fetch(`${baseUrl}/api/admin/products`, { method: 'POST', headers: adminHeaders, body: form });
   const product = await json(createResponse);
   assert.equal(createResponse.status, 201, JSON.stringify(product));
-  assert.equal(product.stock, 10);
+  assert.equal(product.stock, 0);
   assert.equal(product.category, 'Marmitas');
   assert.match(product.imageUrl, /^\/uploads\/product-/);
   const uploadedPath = path.join(uploadDir, path.basename(product.imageUrl));
@@ -116,7 +115,7 @@ try {
   editForm.set('category', 'Pratos');
   editForm.set('priceCents', '3000');
   editForm.set('costCents', '900');
-  editForm.set('stock', '10');
+  editForm.set('stock', '0');
   editForm.set('active', 'true');
   editForm.set('manualSoldOut', 'false');
   editForm.set('image', new Blob([imageBytes], { type: 'image/png' }), 'marmita-edited.png');
@@ -130,7 +129,7 @@ try {
   assert.equal((await fetch(`${baseUrl}${editedProduct.imageUrl}`)).status, 200);
 
   const publicCatalog = await json(await fetch(`${baseUrl}/api/products`));
-  assert.ok(publicCatalog.some(item => item.id === product.id && item.stock === 10));
+  assert.ok(publicCatalog.some(item => item.id === product.id && item.stock === 0), JSON.stringify({ product, publicCatalog }));
   const adminCatalog = await json(await fetch(`${baseUrl}/api/admin/products`, { headers: adminHeaders }));
   assert.ok(Array.isArray(adminCatalog), JSON.stringify(adminCatalog));
   assert.equal(adminCatalog.find(item => item.id === product.id).manualSoldOut, false);
@@ -159,21 +158,21 @@ try {
     assert.match(result.error, /No momento não realizamos entregas neste bairro/);
   }
   assert.equal(await prisma.order.count(), orderCountBeforeNeighborhoodChecks, 'blocked delivery attempts create no orders');
-  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 10, 'blocked attempts do not consume stock');
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0, 'blocked attempts do not consume stock');
 
-  const excessiveOrder = await makeOrder('Mossoró', 11);
-  assert.equal(excessiveOrder.status, 409, 'quantity above stock is rejected by the backend');
-  assert.match((await json(excessiveOrder)).error, /Estoque insuficiente/);
+  const zeroStockOrder = await makeOrder('Mossoró', 11);
+  assert.equal(zeroStockOrder.status, 201, 'zero quantity in the stock field does not disable purchase');
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0, 'sales never decrement the stock field');
 
   const oneUnitOrder = await makeOrder('Ipanema', 1);
   const oneUnitResult = await json(oneUnitOrder);
   assert.equal(oneUnitOrder.status, 201, JSON.stringify(oneUnitResult));
   assert.equal(oneUnitResult.order.deliveryFeeCents, 500, 'existing delivery fee calculation remains intact');
-  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 9);
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0);
 
   const threeUnitOrder = await makeOrder('Mossoró', 3);
   assert.equal(threeUnitOrder.status, 201);
-  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 6);
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0);
 
   const soldOut = await fetch(`${baseUrl}/api/admin/products/${product.id}`, {
     method: 'PATCH',
@@ -183,7 +182,9 @@ try {
   assert.equal(soldOut.status, 200);
   const soldOutCatalog = await json(await fetch(`${baseUrl}/api/products`));
   assert.ok(soldOutCatalog.some(item => item.id === product.id && item.stock === 0), 'active products remain in the catalog at zero stock');
-  assert.equal((await makeOrder('Mossoró')).status, 409);
+  const orderAtZero = await makeOrder('Mossoró');
+  assert.equal(orderAtZero.status, 201, 'zero stock does not mark the product sold out');
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0);
 
   const restocked = await fetch(`${baseUrl}/api/admin/products/${product.id}`, {
     method: 'PATCH',
@@ -199,7 +200,7 @@ try {
     body: JSON.stringify({ manualSoldOut: true })
   });
   assert.equal(manuallyUnavailable.status, 200);
-  assert.equal((await makeOrder('Mossoró')).status, 409, 'manual sold-out overrides positive stock');
+  assert.equal((await makeOrder('Mossoró')).status, 409, 'manual sold-out blocks purchase regardless of stock');
   assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 5);
 
   const reactivated = await fetch(`${baseUrl}/api/admin/products/${product.id}`, {
@@ -210,14 +211,14 @@ try {
   assert.equal(reactivated.status, 200);
   const fiveUnitOrder = await makeOrder('Mossoró', 5);
   assert.equal(fiveUnitOrder.status, 201);
-  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0);
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 5, 'sales do not decrement positive stock either');
 
-  await prisma.product.update({ where: { id: product.id }, data: { stock: 2 } });
+  await prisma.product.update({ where: { id: product.id }, data: { stock: 0 } });
   const pickup = await makeOrder('Vertentes', 1, 'PICKUP');
   const pickupResult = await json(pickup);
   assert.equal(pickup.status, 201, JSON.stringify(pickupResult));
   assert.equal(pickupResult.order.deliveryFeeCents, 0, 'pickup remains valid and has no delivery fee');
-  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 1);
+  assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0);
 
   const deleteUsedProduct = await fetch(`${baseUrl}/api/admin/products/${product.id}`, { method: 'DELETE', headers: adminHeaders });
   assert.equal(deleteUsedProduct.status, 409, 'product history is protected from destructive deletion');

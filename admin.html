@@ -21,7 +21,7 @@
             <label>Categoria<input name="category" maxlength="60" placeholder="Ex.: Marmitas" required /></label>
             <label>Preço em centavos<input name="priceCents" type="number" min="1" max="100000" required /></label>
             <label>Custo do produto em centavos<input name="costCents" type="number" min="0" max="100000" /></label>
-            <label>Quantidade em estoque<input name="stock" type="number" min="0" max="100000" required /></label>
+            <label>Quantidade em estoque<input name="stock" type="number" min="0" max="100000" /></label>
             <label class="product-image-label">Foto do produto
               <input name="image" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" data-product-file />
             </label>
@@ -30,7 +30,7 @@
               <span data-product-image-name></span>
             </div>
             <label class="choice"><input name="active" type="checkbox" checked /> Ativo no cardápio</label>
-            <label class="choice"><input name="manualSoldOut" type="checkbox" /> Marcar manualmente como esgotado</label>
+            <label class="choice"><input name="manualSoldOut" type="checkbox" /> Esgotado (marque para desativar a disponibilidade)</label>
             <div class="product-form-actions">
               <button class="btn btn-primary" type="submit">Salvar produto</button>
               <button class="btn btn-secondary" type="button" data-clear-product>Limpar</button>

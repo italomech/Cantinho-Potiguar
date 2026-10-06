@@ -50,7 +50,7 @@ async function refresh() {
 async function renderProducts() {
   const products = await request('/api/admin/products');
   $('[data-products]').innerHTML = products.map(product => {
-    const status = !product.active ? 'Inativo' : product.manualSoldOut ? 'Esgotado manualmente' : product.stock === 0 ? 'Esgotado · estoque zero' : `Disponível · ${product.stock} em estoque`;
+    const status = !product.active ? 'Inativo' : product.manualSoldOut ? 'Esgotado' : 'Disponível';
     return `<article class="admin-product"><img src="${escapeHtml(product.imageUrl)}" alt="" /><div><strong>${escapeHtml(product.name)}</strong><span>${escapeHtml(product.category)} · ${money(product.priceCents)} · ${status}</span><span>${product.costCents != null ? `Custo: ${money(product.costCents)}` : 'Custo não informado'}</span></div><div class="admin-product-actions"><button class="btn btn-secondary" type="button" data-edit-product="${escapeHtml(product.id)}">Editar</button><button class="btn btn-secondary btn-danger" type="button" data-delete-product="${escapeHtml(product.id)}">Excluir</button></div></article>`;
   }).join('') || '<p>Nenhum produto cadastrado.</p>';
 }

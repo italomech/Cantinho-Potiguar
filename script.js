@@ -19,13 +19,13 @@ function escapeHtml(value) {
 }
 
 function productIsAvailable(product) {
-	return product.active !== false && !product.manualSoldOut && Number(product.stock) > 0;
+	return product.active !== false && !product.manualSoldOut;
 }
 
 function renderMenu() {
 	productGrid.innerHTML = state.products.map(product => {
 		const available = productIsAvailable(product);
-		const stockLabel = available ? `${product.stock} em estoque` : 'ESGOTADO';
+		const stockLabel = available ? 'Disponível' : 'ESGOTADO';
 		return `<article class="menu-card${available ? '' : ' is-sold-out'}" data-product-id="${escapeHtml(product.id)}">
 			<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />
 			<div class="menu-body">
@@ -146,7 +146,7 @@ function totals() {
 function renderCart() {
 	const items = cartItems();
 	$('[data-cart-count]').textContent = items.reduce((total, item) => total + item.quantity, 0);
-	$('[data-cart-items]').innerHTML = items.length ? items.map(({ product, quantity }) => `<div class="cart-item"><div><strong>${escapeHtml(product.name)}</strong><span>${money(product.price)} cada · ${product.stock} em estoque</span></div><div class="quantity"><button type="button" data-decrease="${escapeHtml(product.id)}" aria-label="Diminuir quantidade de ${escapeHtml(product.name)}">-</button><b>${quantity}</b><button type="button" data-increase="${escapeHtml(product.id)}" aria-label="Aumentar quantidade de ${escapeHtml(product.name)}"${!productIsAvailable(product) || quantity >= product.stock ? ' disabled' : ''}>+</button><button class="remove" type="button" data-remove="${escapeHtml(product.id)}" aria-label="Remover ${escapeHtml(product.name)}">&times;</button></div></div>`).join('') : '<p class="empty-cart">Seu carrinho está vazio.</p>';
+	$('[data-cart-items]').innerHTML = items.length ? items.map(({ product, quantity }) => `<div class="cart-item"><div><strong>${escapeHtml(product.name)}</strong><span>${money(product.price)} cada</span></div><div class="quantity"><button type="button" data-decrease="${escapeHtml(product.id)}" aria-label="Diminuir quantidade de ${escapeHtml(product.name)}">-</button><b>${quantity}</b><button type="button" data-increase="${escapeHtml(product.id)}" aria-label="Aumentar quantidade de ${escapeHtml(product.name)}"${!productIsAvailable(product) ? ' disabled' : ''}>+</button><button class="remove" type="button" data-remove="${escapeHtml(product.id)}" aria-label="Remover ${escapeHtml(product.name)}">&times;</button></div></div>`).join('') : '<p class="empty-cart">Seu carrinho está vazio.</p>';
 	const summary = totals();
 	$('[data-cart-subtotal]').textContent = money(summary.subtotal);
 	$('[data-cart-delivery]').textContent = money(summary.delivery);
@@ -162,8 +162,8 @@ function changeCart(productId, delta) {
 	const product = state.products.find(item => String(item.id) === normalizedProductId);
 	if (!product) return false;
 	const next = (state.cart.get(normalizedProductId) || 0) + delta;
-	if (delta > 0 && (!productIsAvailable(product) || next > product.stock)) {
-		$('[data-form-message]').textContent = product.manualSoldOut || product.stock === 0 ? 'Este produto está esgotado.' : `Estoque disponível: ${product.stock} unidade(s).`;
+	if (delta > 0 && !productIsAvailable(product)) {
+		$('[data-form-message]').textContent = 'Este produto está esgotado.';
 		return false;
 	}
 	if (next > 0) state.cart.set(normalizedProductId, next);
@@ -231,7 +231,7 @@ function updateSendOrderButton() {
 	const method = document.querySelector('input[name="deliveryMethod"]:checked')?.value;
 	const neighborhood = document.querySelector('input[name="neighborhood"]')?.value;
 	const blockedNeighborhood = method === 'DELIVERY' && isUnavailableNeighborhood(neighborhood);
-	const unavailableProduct = cartItems().some(({ product, quantity }) => !productIsAvailable(product) || quantity > product.stock);
+	const unavailableProduct = cartItems().some(({ product }) => !productIsAvailable(product));
 	sendOrderButton.disabled = orderShared || (!orderCreated && (!state.pixPayment?.configured || !file || file.size > maxProofSize || !isSupportedProof(file) || blockedNeighborhood || unavailableProduct));
 }
 
@@ -373,7 +373,6 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 			throw new Error('O servidor não confirmou o registro do pedido e do comprovante.');
 		}
 		orderCreated = true;
-		for (const { product, quantity } of cartItems()) product.stock -= quantity;
 		state.cart.clear();
 		renderMenu();
 		renderCart();
