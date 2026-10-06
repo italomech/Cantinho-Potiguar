@@ -123,17 +123,24 @@ function isUnavailableNeighborhood(value) {
 	const normalized = normalizeBlockedNeighborhood(value);
 	return ['instabul', 'vertentes'].some(neighborhood => isOneEditAway(normalized, neighborhood));
 }
+function unavailableNeighborhoodMessage(value) {
+	return isOneEditAway(normalizeBlockedNeighborhood(value), 'instabul')
+		? 'Não entregamos neste bairro. Rota indisponível.'
+		: '🚫 No momento não realizamos entregas neste bairro. Por favor, escolha outro bairro ou selecione retirada no local.';
+}
 function updateNeighborhoodValidation() {
 	const method = document.querySelector('input[name="deliveryMethod"]:checked')?.value;
 	const neighborhood = document.querySelector('input[name="neighborhood"]')?.value;
 	const blocked = method === 'DELIVERY' && isUnavailableNeighborhood(neighborhood);
 	const warning = $('[data-neighborhood-message]');
+	warning.textContent = blocked ? unavailableNeighborhoodMessage(neighborhood) : '';
 	warning.hidden = !blocked;
 	updateSendOrderButton();
 	return blocked;
 }
 function calculateDeliveryFee(neighborhood, deliveryMethod) {
 	if (deliveryMethod === 'PICKUP') return 0;
+	if (isUnavailableNeighborhood(neighborhood)) return 0;
 	return ['upanema', 'ipanema'].includes(normalizeNeighborhood(neighborhood)) ? 5 : 2;
 }
 function totals() {

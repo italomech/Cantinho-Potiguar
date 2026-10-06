@@ -155,7 +155,8 @@ try {
     const response = await makeOrder(neighborhood);
     const result = await json(response);
     assert.equal(response.status, 400, `${neighborhood} must be refused for delivery`);
-    assert.match(result.error, /No momento não realizamos entregas neste bairro/);
+    if (['Vertentes', 'Vértentes'].includes(neighborhood)) assert.match(result.error, /No momento não realizamos entregas neste bairro/);
+    else assert.equal(result.error, 'Não entregamos neste bairro. Rota indisponível.');
   }
   assert.equal(await prisma.order.count(), orderCountBeforeNeighborhoodChecks, 'blocked delivery attempts create no orders');
   assert.equal((await prisma.product.findUnique({ where: { id: product.id } })).stock, 0, 'blocked attempts do not consume stock');

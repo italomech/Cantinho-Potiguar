@@ -221,7 +221,11 @@ function isUnavailableNeighborhood(value) {
   const normalized = normalizeBlockedNeighborhood(value);
   return unavailableNeighborhoods.some(neighborhood => isOneEditAway(normalized, neighborhood));
 }
-const unavailableNeighborhoodMessage = '🚫 No momento não realizamos entregas neste bairro. Por favor, escolha outro bairro ou selecione retirada no local.';
+function unavailableNeighborhoodMessage(value) {
+  return isOneEditAway(normalizeBlockedNeighborhood(value), 'instabul')
+    ? 'Não entregamos neste bairro. Rota indisponível.'
+    : '🚫 No momento não realizamos entregas neste bairro. Por favor, escolha outro bairro ou selecione retirada no local.';
+}
 async function manualPixPayment() {
   const pixKey = process.env.PIX_KEY?.trim() || defaultPixKey;
   const pixPayload = process.env.PIX_QR_PAYLOAD?.trim();
@@ -247,6 +251,7 @@ function normalizeNeighborhood(value) {
 }
 function calculateDeliveryFeeCents(neighborhood, deliveryMethod) {
   if (deliveryMethod === 'PICKUP') return 0;
+  if (isUnavailableNeighborhood(neighborhood)) return 0;
   const normalizedNeighborhood = normalizeNeighborhood(neighborhood);
   return ['upanema', 'ipanema'].includes(normalizedNeighborhood) ? 500 : 200;
 }
@@ -662,7 +667,7 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     if (input.deliveryMethod === 'DELIVERY' && isUnavailableNeighborhood(input.neighborhood)) {
       if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
       proofPath = null;
-      return res.status(400).json({ error: unavailableNeighborhoodMessage });
+      return res.status(400).json({ error: unavailableNeighborhoodMessage(input.neighborhood) });
     }
     let pixPayment = null;
     let proofType = null;
