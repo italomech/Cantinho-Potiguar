@@ -129,7 +129,12 @@ try {
     return result.order;
   };
 
-  let current = await completeOrder('84999999999', [[0, 5]]);
+  const firstOrderResponse = await createOrder('84999999999', [[0, 5]]);
+  assert.equal(firstOrderResponse.result.fidelity.points, 0, 'pending order does not increase the public message counter');
+  assert.equal(firstOrderResponse.result.fidelity.validOrdersCount, 0);
+  let current = firstOrderResponse.result.order;
+  await status(current.id, 'PAID');
+  await status(current.id, 'COMPLETED');
   assert.equal(current.items[0].quantity, 5);
   let account = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84999999999' } });
   assert.equal(account.points, 1, 'five units in one order earn one stamp');
@@ -138,12 +143,16 @@ try {
   const distinctItems = await createOrder('+55 (84) 99999-9999', [[0, 1], [1, 1]], duplicateToken);
   const duplicate = await createOrder('84999999999', [[0, 5]], duplicateToken);
   assert.equal(duplicate.result.order.id, distinctItems.result.order.id, 'repeated checkout token resolves to the same order');
-  assert.equal(Object.hasOwn(distinctItems.result, 'fidelity'), false, 'public checkout responses do not reveal a phone number account balance');
+  assert.equal(distinctItems.result.fidelity.points, 1, 'new order message uses the current database progress');
+  assert.equal(distinctItems.result.fidelity.validOrdersCount, 1);
+  assert.equal(distinctItems.result.fidelity.rewardsEarned, 0);
   assert.equal(Object.hasOwn(distinctItems.result.order, 'phoneNormalized'), false, 'public order responses do not expose normalized phone identifiers');
   await status(distinctItems.result.order.id, 'COMPLETED');
   account = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84999999999' } });
   assert.equal(account.points, 1, 'completion alone is insufficient before payment confirmation');
   await status(distinctItems.result.order.id, 'PAID');
+  account = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84999999999' } });
+  assert.equal(account.points, 1, 'paid but incomplete order does not grant a stamp');
   await status(distinctItems.result.order.id, 'COMPLETED');
   await status(distinctItems.result.order.id, 'COMPLETED');
   account = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84999999999' } });
@@ -165,6 +174,19 @@ try {
   let rewards = await prisma.fidelityReward.findMany({ where: { accountId: account.id } });
   assert.equal(rewards.length, 1, 'a single reward is issued when the tenth distinct order is completed');
   assert.equal(rewards[0].status, 'AVAILABLE');
+  const rewardProgress = await createOrder('84999999999', [[0, 1]]);
+  assert.equal(rewardProgress.result.fidelity.points, 10, 'tenth completed order displays a full card');
+  assert.equal(rewardProgress.result.fidelity.rewardAvailable, true, 'message reports the earned reward');
+  assert.equal(rewardProgress.result.fidelity.remaining, 0);
+  assert.equal(rewardProgress.result.fidelity.rewardsEarned, 1);
+  await status(rewardProgress.result.order.id, 'CANCELLED');
+
+  const adminCardsResponse = await fetch(`${baseUrl}/api/admin/fidelity`, { headers: { Cookie: cookie } });
+  assert.equal(adminCardsResponse.status, 200);
+  const adminCard = (await adminCardsResponse.json()).find(item => item.phoneNormalized === '84999999999');
+  assert.equal(adminCard.points, rewardProgress.result.fidelity.points, 'admin and customer message use the same progress');
+  assert.equal(adminCard.validOrdersCount, rewardProgress.result.fidelity.validOrdersCount);
+  assert.equal(adminCard.rewards.length, rewardProgress.result.fidelity.rewardsEarned);
 
   await completeOrder('84999999999', [[0, 1]]);
   await completeOrder('84999999999', [[1, 1]]);
@@ -213,6 +235,12 @@ try {
   account = await prisma.fidelityAccount.findUnique({ where: { id: account.id } });
   assert.equal(account.points, 2, 'queued points start the next cycle once reward is redeemed');
   assert.equal(account.queuedPoints, 0);
+  const nextCycleProgress = await createOrder('84999999999', [[1, 1]]);
+  assert.equal(nextCycleProgress.result.fidelity.points, 2, 'progress continues after the prior reward is redeemed');
+  assert.equal(nextCycleProgress.result.fidelity.validOrdersCount, 12, 'lifetime valid-order history is retained');
+  assert.equal(nextCycleProgress.result.fidelity.rewardsEarned, 1, 'previously earned rewards remain in the history');
+  assert.equal(nextCycleProgress.result.fidelity.rewardAvailable, false);
+  await status(nextCycleProgress.result.order.id, 'CANCELLED');
 
   const secondCustomerOrder = await completeOrder('84988887777', [[0, 1]]);
   assert.equal(Object.hasOwn(secondCustomerOrder, 'phoneNormalized'), false, 'normalized phone identifier is not returned to public clients');
@@ -225,6 +253,14 @@ try {
   const cancelled = await createOrder('84977776666', [[0, 1]]);
   await status(cancelled.result.order.id, 'CANCELLED');
   assert.equal(await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84977776666' } }).then(item => item.points), 0, 'an uncompleted cancelled order earns no point');
+
+  await stopServer();
+  const restartedBaseUrl = await startServer();
+  const persistedCardsResponse = await fetch(`${restartedBaseUrl}/api/admin/fidelity`, { headers: { Cookie: cookie } });
+  assert.equal(persistedCardsResponse.status, 200, 'admin card history remains available after the server restarts');
+  const persistedCard = (await persistedCardsResponse.json()).find(item => item.phoneNormalized === '84999999999');
+  assert.equal(persistedCard.validOrdersCount, 12, 'server restart does not erase the loyalty history');
+  assert.equal(persistedCard.rewards.length, 1);
 
   console.log('Digital loyalty eligibility, per-order idempotency, rewards, cancellation review, phone normalization, and account separation passed.');
 } finally {

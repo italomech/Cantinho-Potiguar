@@ -74,7 +74,9 @@ async function refreshFidelity() {
       const reviews = account.events.filter(event => !event.rewardId).map(event =>
         `<article class="fidelity-review"><p>Pedido #${event.order?.number || '—'} cancelado após contagem. O saldo está preservado até revisão.</p><button class="btn btn-secondary" data-resolve-review data-event-id="${escapeHtml(event.id)}" data-resolution="HONOR">Manter saldo</button><button class="btn btn-secondary btn-danger" data-resolve-review data-event-id="${escapeHtml(event.id)}" data-resolution="REVOKE">Estornar ponto</button></article>`
       ).join('');
-      return `<article class="fidelity-admin-card"><div><strong>WhatsApp ${escapeHtml(account.phoneNormalized)}</strong><span>${account.validOrdersCount} pedidos válidos · ${account.points}/10 no ciclo</span></div><p>${account.queuedPoints} ponto(s) aguardando próximo ciclo${account.reviewRequired ? ' · revisão pendente' : ''}</p><ul>${rewardRows || '<li>Nenhuma recompensa emitida.</li>'}</ul>${reviews}</article>`;
+      const points = Math.min(10, Math.max(0, Number(account.points) || 0));
+      const progressBar = `${'🟩'.repeat(points)}${'⬜'.repeat(10 - points)}`;
+      return `<article class="fidelity-admin-card"><div><strong>WhatsApp ${escapeHtml(account.phoneNormalized)}</strong><span>${account.validOrdersCount} pedidos válidos no histórico · ${account.rewards.length} recompensa(s) conquistada(s)</span></div><span class="fidelity-admin-stamps" aria-label="Progresso: ${points} de 10 pedidos válidos">${progressBar}</span><p>Progresso do cartão: ${points}/10${points === 10 ? ' · recompensa conquistada' : ` · faltam ${10 - points} pedido(s)`}</p><p>${account.queuedPoints} ponto(s) aguardando próximo ciclo${account.reviewRequired ? ' · revisão pendente' : ''}</p><ul>${rewardRows || '<li>Nenhuma recompensa emitida.</li>'}</ul>${reviews}</article>`;
     }).join('') : '<p>Nenhum cartão criado ainda. Um cartão aparece após o cliente registrar um pedido.</p>';
   } catch (error) {
     $('[data-fidelity-accounts]').innerHTML = `<p class="form-message">${escapeHtml(error.message)}</p>`;

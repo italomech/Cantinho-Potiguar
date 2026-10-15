@@ -415,12 +415,44 @@ function formatCustomerOrderMessage(order) {
 		lines.push(`Troco para: ${money(order.cashTenderedCents / 100)}`, `Troco estimado: ${money(order.cashChangeCents / 100)}`);
 	}
 	if (order.paymentMethod === 'PIX') lines.push(`Comprovante Pix: ${proofUrl || 'arquivo salvo no pedido'}`);
-	lines.push(
-		'',
-		'CARTÃO FIDELIDADE',
-		'Este pedido só contará após a confirmação do pagamento e a conclusão pela equipe. Fale com a equipe para consultar seu progresso.'
-	);
+	lines.push(...formatFidelityMessage(order.fidelity));
 	return lines.join('\n');
+}
+
+function formatFidelityMessage(fidelity) {
+	if (!fidelity) {
+		return [
+			'',
+			'🎁 CARTÃO FIDELIDADE',
+			'Não foi possível consultar o progresso deste número. A equipe poderá verificar o cartão.'
+		];
+	}
+	const goal = Math.max(1, Number(fidelity.goal) || 10);
+	const points = Math.min(goal, Math.max(0, Number(fidelity.points) || 0));
+	const remaining = Math.max(0, Number(fidelity.remaining) || 0);
+	const lines = [
+		'',
+		'🎁 CARTÃO FIDELIDADE',
+		`${'🟩'.repeat(points)}${'⬜'.repeat(goal - points)}`,
+		`📊 Progresso: ${points}/${goal} pedidos concluídos`,
+		`📚 Total de pedidos válidos: ${Number(fidelity.validOrdersCount) || 0}`,
+		`🏆 Recompensas conquistadas: ${Number(fidelity.rewardsEarned) || 0}`
+	];
+	if (fidelity.rewardUnderReview) {
+		lines.push('⚠️ Há um pedido em revisão. A equipe confirmará o saldo e a recompensa.');
+	} else if (fidelity.rewardAvailable) {
+		lines.push('🎉 Você conquistou a recompensa: 1 pedido grátis! Fale com a equipe para validar o resgate.');
+	} else {
+		lines.push(`🎯 Faltam ${remaining} pedido${remaining === 1 ? '' : 's'} para ganhar 1 pedido grátis!`);
+	}
+	const queuedPoints = Math.max(0, Number(fidelity.queuedPoints) || 0);
+	if (queuedPoints > 0) {
+		const queuedProgress = Math.min(goal, queuedPoints);
+		const remainingQueued = queuedPoints - queuedProgress;
+		lines.push(`📌 Próximo cartão: ${queuedProgress}/${goal} pedidos guardados${remainingQueued ? ` (+${remainingQueued} para ciclos seguintes)` : ''} enquanto a recompensa atual aguarda resgate.`);
+	}
+	lines.push('Este pedido ainda não conta: ele precisa ser pago e concluído pela equipe.');
+	return lines;
 }
 
 function prepareOrderWhatsAppLink(message) {
@@ -500,7 +532,7 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 		$('[data-payment-result]').textContent = paymentMethod === 'PIX'
 			? 'Pedido registrado. O pagamento continua pendente até a conferência do comprovante.'
 			: 'Pedido registrado. O pagamento será recebido na entrega e continuará pendente até a confirmação pela equipe.';
-		createdOrderMessage = formatCustomerOrderMessage(result.order);
+		createdOrderMessage = formatCustomerOrderMessage({ ...result.order, fidelity: result.fidelity });
 		prepareOrderWhatsAppLink(createdOrderMessage);
 	} catch (error) {
 		console.error('[POST /api/orders] Checkout encerrado sem confirmação', {

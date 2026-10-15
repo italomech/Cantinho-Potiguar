@@ -205,6 +205,23 @@ async function fidelityAccountForPhone(client, phoneNormalized) {
     create: { phoneNormalized }
   });
 }
+async function fidelitySummary(client, phoneNormalized) {
+  const account = await client.fidelityAccount.findUnique({
+    where: { phoneNormalized },
+    include: { rewards: { select: { status: true } } }
+  });
+  if (!account) return null;
+  return {
+    goal: 10,
+    points: account.points,
+    queuedPoints: account.queuedPoints,
+    validOrdersCount: account.validOrdersCount,
+    rewardsEarned: account.rewards.length,
+    remaining: Math.max(0, 10 - account.points),
+    rewardAvailable: account.rewards.some(reward => reward.status === 'AVAILABLE'),
+    rewardUnderReview: account.reviewRequired || account.rewards.some(reward => reward.status === 'REVIEW_REQUIRED')
+  };
+}
 async function issueFidelityReward(client, account, cycle, actor = null) {
   const reward = await client.fidelityReward.create({ data: { accountId: account.id, cycle } });
   await client.fidelityEvent.create({
@@ -338,7 +355,8 @@ async function respondWithExistingOrder(res, order) {
   if (order.paymentMethod === 'PIX') payment = { ...await manualPixPayment(), status: order.paymentStatus };
   else if (order.paymentMethod === 'CASH' || order.paymentMethod === 'CARD_ON_DELIVERY') payment = { configured: true, type: order.paymentMethod };
   else payment = { configured: Boolean(order.preferenceId), type: 'CARD', preferenceId: order.preferenceId };
-  return res.status(200).json({ order: orderPayload(order), payment });
+  const fidelity = order.phoneNormalized ? await fidelitySummary(prisma, order.phoneNormalized) : null;
+  return res.status(200).json({ order: orderPayload(order), payment, fidelity });
 }
 class OrderValidationError extends Error {
   constructor(code, message, status = 409) {
@@ -905,22 +923,38 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     proofPath = null;
 
     if (input.paymentMethod === 'PIX') {
-      return res.status(201).json({ order: orderPayload(order), payment: { ...pixPayment, status: 'PENDING' } });
+      return res.status(201).json({
+        order: orderPayload(order),
+        payment: { ...pixPayment, status: 'PENDING' },
+        fidelity: await fidelitySummary(prisma, phoneNormalized)
+      });
     }
 
     if (input.paymentMethod === 'CASH') {
-      return res.status(201).json({ order: orderPayload(order), payment: { configured: true, type: 'CASH' } });
+      return res.status(201).json({
+        order: orderPayload(order),
+        payment: { configured: true, type: 'CASH' },
+        fidelity: await fidelitySummary(prisma, phoneNormalized)
+      });
     }
 
     if (input.paymentMethod === 'CARD_ON_DELIVERY') {
-      return res.status(201).json({ order: orderPayload(order), payment: { configured: true, type: 'CARD_ON_DELIVERY' } });
+      return res.status(201).json({
+        order: orderPayload(order),
+        payment: { configured: true, type: 'CARD_ON_DELIVERY' },
+        fidelity: await fidelitySummary(prisma, phoneNormalized)
+      });
     }
 
     if (!mercadoPagoAccessToken || !hasMercadoPagoToken) return res.status(503).json({ error: 'Mercado Pago nao configurado no servidor.' });
     const payment = await createCheckoutPreference(order);
     const savedOrder = await prisma.order.update({ where: { id: order.id }, data: { preferenceId: payment.id, orderStatus: 'PAYMENT_PENDING' }, include: { items: true } });
     const checkoutUrl = mercadoPagoMode === 'test' ? payment.sandbox_init_point : payment.init_point;
-    return res.status(201).json({ order: orderPayload(savedOrder), payment: { configured: true, type: 'CARD', preferenceId: payment.id, checkoutUrl, mode: mercadoPagoMode } });
+    return res.status(201).json({
+      order: orderPayload(savedOrder),
+      payment: { configured: true, type: 'CARD', preferenceId: payment.id, checkoutUrl, mode: mercadoPagoMode },
+      fidelity: await fidelitySummary(prisma, phoneNormalized)
+    });
   } catch (error) {
     if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
     if (error.code === 'P2002' && parsed.data.checkoutToken) {

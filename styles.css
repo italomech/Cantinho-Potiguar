@@ -95,6 +95,7 @@ body {
 .fidelity-admin-card { min-width: 0; padding: 1rem; border: 1px solid rgba(29, 42, 32, 0.08); border-radius: 14px; background: var(--bg-soft); overflow-wrap: anywhere; }
 .fidelity-admin-card > div:first-child strong, .fidelity-admin-card > div:first-child span { display: block; }
 .fidelity-admin-card > div:first-child span { color: var(--muted); font-size: 0.86rem; }
+.fidelity-admin-stamps { display: block; margin: 0.65rem 0 0.25rem; letter-spacing: 0.06em; overflow-wrap: anywhere; }
 .fidelity-admin-card ul { padding-left: 1.1rem; }
 .fidelity-admin-card li { margin: 0.55rem 0; }
 .fidelity-review-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
