@@ -9,10 +9,15 @@ const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', curre
 const $ = selector => document.querySelector(selector);
 const apiBase = window.CANTINHO_API_BASE || '';
 const orderWhatsAppNumber = '558498115276';
+const orderEnquiryMessage = 'Olá! Vim pelo site do Cantinho Potiguar e gostaria de fazer uma ENCOMENDA.\n\nGostaria de receber informações sobre as opções disponíveis, quantidades, valores e condições para a minha encomenda.\n\nPoderiam me ajudar, por favor?';
 const mobileMenuToggle = $('[data-mobile-menu-toggle]');
 const mainMenu = $('[data-main-menu]');
 const productGrid = $('[data-menu-products]');
 const staticMenuCards = [...productGrid.querySelectorAll('.menu-card:not([data-product-id])')].map(card => card.outerHTML).join('');
+const orderEnquiryLink = $('[data-order-enquiry]');
+orderEnquiryLink.href = `https://wa.me/${orderWhatsAppNumber}?text=${encodeURIComponent(orderEnquiryMessage)}`;
+orderEnquiryLink.target = '_blank';
+orderEnquiryLink.rel = 'noopener noreferrer';
 
 function escapeHtml(value) {
 	return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -245,7 +250,12 @@ document.addEventListener('click', event => {
 	const increase = event.target.closest('[data-increase]'); if (increase) changeCart(increase.dataset.increase, 1);
 	const decrease = event.target.closest('[data-decrease]'); if (decrease) changeCart(decrease.dataset.decrease, -1);
 	const remove = event.target.closest('[data-remove]'); if (remove) { state.cart.delete(remove.dataset.remove); renderCart(); }
-	if (event.target.closest('[data-open-checkout]') && state.cart.size) { closeCart(); $('[data-checkout-dialog]').showModal(); renderCart(); }
+	if (event.target.closest('[data-open-checkout]') && state.cart.size) {
+		closeCart();
+		if (orderCreated) resetCheckoutForNextOrder();
+		$('[data-checkout-dialog]').showModal();
+		renderCart();
+	}
 	if (event.target.closest('[data-close-checkout]')) $('[data-checkout-dialog]').close();
 });
 document.addEventListener('input', event => { if (event.target.name === 'neighborhood') renderCart(); });
@@ -306,6 +316,25 @@ function clearProofPreview() {
 	proofImage.hidden = true;
 	proofImage.removeAttribute('src');
 	proofName.textContent = '';
+}
+
+function resetCheckoutForNextOrder() {
+	const form = $('[data-checkout-form]');
+	form.reset();
+	form.querySelectorAll('input, button[type="submit"]').forEach(input => { input.disabled = false; });
+	checkoutTokenInput.value = newCheckoutToken();
+	orderCreated = false;
+	createdOrderMessage = '';
+	proofInput.value = '';
+	clearProofPreview();
+	proofStatus.textContent = 'Selecione um arquivo de até 10 MB.';
+	proofStatus.classList.remove('is-error');
+	$('[data-address-fields]').hidden = false;
+	$('[data-form-message]').textContent = '';
+	$('[data-payment-result]').textContent = '';
+	$('[data-order-whatsapp]').hidden = true;
+	$('[data-order-whatsapp]').removeAttribute('href');
+	updatePaymentSelectionUI();
 }
 
 proofInput.addEventListener('change', () => {
@@ -395,7 +424,7 @@ function prepareOrderWhatsAppLink(message) {
 	whatsappLink.href = whatsappUrl;
 	whatsappLink.hidden = false;
 	if (selectedPaymentMethod() === 'PIX') {
-		proofStatus.textContent = 'O comprovante foi salvo no pedido. Você pode abrir o WhatsApp para enviar os detalhes.';
+		proofStatus.textContent = 'Comprovante salvo e associado a este pedido. Abra o WhatsApp se quiser encaminhar os detalhes.';
 		proofStatus.classList.remove('is-error');
 	}
 }
@@ -448,6 +477,11 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 			throw new Error('O servidor não confirmou o registro do pedido e do comprovante Pix.');
 		}
 		orderCreated = true;
+		proofInput.value = '';
+		clearProofPreview();
+		proofStatus.textContent = paymentMethod === 'PIX'
+			? 'Comprovante salvo e associado a este pedido.'
+			: 'Nenhum comprovante é necessário para esta forma de pagamento.';
 		state.cart.clear();
 		renderMenu();
 		renderCart();
