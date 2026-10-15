@@ -269,6 +269,7 @@ document.addEventListener('input', event => {
 
 const proofInput = $('[data-checkout-form] input[name="pixProof"]');
 const checkoutTokenInput = $('[data-checkout-token]');
+const fidelityAccessKey = 'cantinho-potiguar-fidelity-access';
 function newCheckoutToken() {
 	if (window.crypto.randomUUID) return window.crypto.randomUUID();
 	const bytes = window.crypto.getRandomValues(new Uint8Array(16));
@@ -433,9 +434,9 @@ function formatFidelityMessage(fidelity) {
 	const lines = [
 		'',
 		'🎁 CARTÃO FIDELIDADE',
-		`${'🟩'.repeat(points)}${'⬜'.repeat(goal - points)}`,
-		`📊 Progresso: ${points}/${goal} pedidos concluídos`,
-		`📚 Total de pedidos válidos: ${Number(fidelity.validOrdersCount) || 0}`,
+		`${'🟦'.repeat(points)}${'⬜'.repeat(goal - points)}`,
+		`📊 Progresso: ${points}/${goal} pedidos no cartão`,
+		`📚 Total de pedidos validados: ${Number(fidelity.validOrdersCount) || 0}`,
 		`🏆 Recompensas conquistadas: ${Number(fidelity.rewardsEarned) || 0}`
 	];
 	if (fidelity.rewardUnderReview) {
@@ -451,8 +452,54 @@ function formatFidelityMessage(fidelity) {
 		const remainingQueued = queuedPoints - queuedProgress;
 		lines.push(`📌 Próximo cartão: ${queuedProgress}/${goal} pedidos guardados${remainingQueued ? ` (+${remainingQueued} para ciclos seguintes)` : ''} enquanto a recompensa atual aguarda resgate.`);
 	}
-	lines.push('Este pedido ainda não conta: ele precisa ser pago e concluído pela equipe.');
+	if (Number(fidelity.provisionalPoints) > 0) {
+		lines.push(`⏳ ${Number(fidelity.provisionalPoints)} crédito(s) provisório(s) aguardando conferência do comprovante Pix.`);
+	}
 	return lines;
+}
+
+function renderFidelityCard(fidelity) {
+	if (!fidelity) return;
+	const goal = Math.max(1, Number(fidelity.goal) || 10);
+	const points = Math.min(goal, Math.max(0, Number(fidelity.points) || 0));
+	const provisionalPoints = Math.max(0, Number(fidelity.provisionalPoints) || 0);
+	$('[data-fidelity-empty]').hidden = true;
+	$('[data-fidelity-progress]').hidden = false;
+	$('[data-fidelity-stamps]').innerHTML = Array.from({ length: goal }, (_, index) => {
+		const earned = index < points;
+		const provisional = earned && index >= points - provisionalPoints;
+		const stampStatus = earned ? provisional ? 'Crédito provisório' : 'Pedido validado' : 'Pedido ainda não contabilizado';
+		return `<li class="loyalty-stamp${earned ? ' is-complete' : ''}${provisional ? ' is-provisional' : ''}" aria-label="${stampStatus}">${index + 1}</li>`;
+	}).join('');
+	$('[data-fidelity-message]').textContent = fidelity.rewardUnderReview
+		? 'Sua recompensa está em revisão pela equipe.'
+		: fidelity.rewardAvailable
+			? 'Você conquistou um pedido grátis. O resgate deve ser validado pela equipe.'
+			: `${points}/${goal} pedidos no cartão. ${provisionalPoints ? 'Créditos Pix provisórios já aparecem no progresso e aguardam conferência.' : 'Continue pedindo para ganhar um pedido grátis.'}`;
+	$('[data-fidelity-count]').textContent = `Progresso: ${points}/${goal} · ${Number(fidelity.validOrdersCount) || 0} pedido(s) validado(s)`;
+	const queue = $('[data-fidelity-queue]');
+	queue.hidden = !Number(fidelity.queuedPoints);
+	queue.textContent = queue.hidden ? '' : `${Number(fidelity.queuedPoints)} ponto(s) guardado(s) para o próximo cartão enquanto a recompensa atual aguarda resgate.`;
+}
+
+async function restoreFidelityCard() {
+	let checkoutToken;
+	try {
+		checkoutToken = localStorage.getItem(fidelityAccessKey);
+	} catch (error) {
+		console.error('Não foi possível ler o acesso salvo ao cartão fidelidade:', error);
+		return;
+	}
+	if (!checkoutToken) return;
+	try {
+		const response = await apiFetch(`/api/fidelity/progress?checkoutToken=${encodeURIComponent(checkoutToken)}`);
+		const result = await response.json();
+		if (!response.ok) throw new Error(result.error || 'Não foi possível recuperar o cartão fidelidade.');
+		renderFidelityCard(result);
+	} catch (error) {
+		console.error('Não foi possível recuperar o cartão fidelidade:', error);
+		$('[data-fidelity-message]').textContent = 'Não foi possível atualizar o cartão. Tente novamente mais tarde.';
+	}
 }
 
 function prepareOrderWhatsAppLink(message) {
@@ -514,6 +561,12 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 			throw new Error('O servidor não confirmou o registro do pedido e do comprovante Pix.');
 		}
 		orderCreated = true;
+		try {
+			localStorage.setItem(fidelityAccessKey, checkoutTokenInput.value);
+		} catch (error) {
+			console.error('Não foi possível salvar o acesso ao cartão fidelidade neste navegador:', error);
+		}
+		renderFidelityCard(result.fidelity);
 		proofInput.value = '';
 		clearProofPreview();
 		proofStatus.textContent = paymentMethod === 'PIX'
@@ -577,3 +630,5 @@ document.addEventListener('click', async event => {
 
 loadCatalog().then(renderCart).catch(error => { $('[data-form-message]').textContent = error.message; });
 loadPixSettings();
+restoreFidelityCard();
+setInterval(restoreFidelityCard, 15000);

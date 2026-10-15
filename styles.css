@@ -432,7 +432,8 @@ img {
 .loyalty-message { color: var(--primary); font-size: 1.08rem; font-weight: 700; }
 .loyalty-stamps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: clamp(0.4rem, 2vw, 0.8rem); margin: 1.25rem 0; padding: 0; list-style: none; }
 .loyalty-stamp { display: grid; place-items: center; aspect-ratio: 1; max-width: 4.5rem; border: 2px dashed rgba(111, 13, 34, 0.3); border-radius: 50%; color: var(--muted); font-weight: 700; }
-.loyalty-stamp.is-complete { border: 2px solid var(--accent); background: var(--primary); color: #fff; box-shadow: 0 4px 12px rgba(71, 9, 20, 0.16); }
+.loyalty-stamp.is-complete { border: 2px solid #1976d2; background: #1976d2; color: #fff; box-shadow: 0 4px 12px rgba(25, 118, 210, 0.2); }
+.loyalty-stamp.is-provisional { border-style: dashed; background: #e3f2fd; color: #0d47a1; }
 .loyalty-count, .loyalty-queue { color: var(--muted); }
 .loyalty-rules { margin-top: 1rem; border-top: 1px solid rgba(29, 42, 32, 0.1); padding-top: 0.9rem; }
 .loyalty-rules summary { color: var(--primary); font-weight: 700; cursor: pointer; }

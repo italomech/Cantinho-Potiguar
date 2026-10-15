@@ -32,7 +32,7 @@ function renderOrders() {
   $('[data-orders]').innerHTML = orders.length ? orders.map(order => {
     const proofStatus = order.pixProofStatus || 'NONE';
     const proofAction = order.pixProofUrl ? `<a class="mini-link" href="${escapeHtml(order.pixProofUrl)}" target="_blank" rel="noreferrer">Ver comprovante</a>` : '<span class="muted">Sem comprovante</span>';
-    const actions = order.pixProofUrl && order.paymentStatus !== 'APPROVED' ? `<div class="proof-actions"><button type="button" class="btn btn-secondary" data-proof-confirm="${escapeHtml(order.id)}">Confirmar pagamento</button><button type="button" class="btn btn-secondary" data-proof-reject="${escapeHtml(order.id)}">Recusar comprovante</button></div>` : '';
+    const actions = order.pixProofUrl && order.pixProofStatus !== 'REJECTED' ? `<div class="proof-actions">${order.paymentStatus !== 'APPROVED' ? `<button type="button" class="btn btn-secondary" data-proof-confirm="${escapeHtml(order.id)}">Confirmar pagamento</button>` : ''}<button type="button" class="btn btn-secondary btn-danger" data-proof-reject="${escapeHtml(order.id)}">Recusar comprovante</button></div>` : '';
     const address = order.deliveryMethod === 'DELIVERY' ? `${order.address || ''}, ${order.addressNumber || ''} - ${order.neighborhood || ''}` : 'Retirada no local';
     const change = order.cashTenderedCents == null ? '' : `<p class="order-cash-change">Dinheiro informado: ${money(order.cashTenderedCents)} · Troco: ${money(order.cashChangeCents)}</p>`;
     return `<article class="admin-order"><div class="order-top"><div><strong>#${order.number}</strong><span>${new Date(order.createdAt).toLocaleString('pt-BR')}</span></div><select data-order-status="${escapeHtml(order.id)}">${Object.entries(labels).map(([value, label]) => `<option value="${value}" ${order.orderStatus === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><h3>${escapeHtml(order.customerName)}</h3><p>${escapeHtml(order.phone)} · ${escapeHtml(address)}</p><ul>${order.items.map(item => `<li>${item.quantity}x ${escapeHtml(item.productName)} (${money(item.unitPriceCents)})</li>`).join('')}</ul><div class="order-total"><span>${escapeHtml(paymentMethodLabels[order.paymentMethod] || order.paymentMethod)} · Pagamento ${escapeHtml(paymentStatusLabels[order.paymentStatus] || order.paymentStatus)}</span><strong>${money(order.totalCents)}</strong></div>${change}<div class="proof-row"><span>${proofLabels[proofStatus] || proofLabels.NONE}</span>${proofAction}</div>${actions}</article>`;
@@ -71,12 +71,20 @@ async function refreshFidelity() {
             : '';
         return `<li><span>Ciclo ${reward.cycle}: ${escapeHtml(status)}</span>${actions}</li>`;
       }).join('');
-      const reviews = account.events.filter(event => !event.rewardId).map(event =>
+      const credits = account.events.filter(event => event.type === 'POINT_EARNED').map(event => {
+        const status = {
+          PROVISIONAL: 'Provisório — aguardando conferência',
+          CONFIRMED: 'Confirmado',
+          REJECTED: 'Removido/rejeitado'
+        }[event.creditStatus] || event.creditStatus;
+        return `<li>Pedido #${event.order?.number || '—'}: ${escapeHtml(status)}</li>`;
+      }).join('');
+      const reviews = account.events.filter(event => event.type === 'POINT_REVERSED' && !event.rewardId).map(event =>
         `<article class="fidelity-review"><p>Pedido #${event.order?.number || '—'} cancelado após contagem. O saldo está preservado até revisão.</p><button class="btn btn-secondary" data-resolve-review data-event-id="${escapeHtml(event.id)}" data-resolution="HONOR">Manter saldo</button><button class="btn btn-secondary btn-danger" data-resolve-review data-event-id="${escapeHtml(event.id)}" data-resolution="REVOKE">Estornar ponto</button></article>`
       ).join('');
       const points = Math.min(10, Math.max(0, Number(account.points) || 0));
-      const progressBar = `${'🟩'.repeat(points)}${'⬜'.repeat(10 - points)}`;
-      return `<article class="fidelity-admin-card"><div><strong>WhatsApp ${escapeHtml(account.phoneNormalized)}</strong><span>${account.validOrdersCount} pedidos válidos no histórico · ${account.rewards.length} recompensa(s) conquistada(s)</span></div><span class="fidelity-admin-stamps" aria-label="Progresso: ${points} de 10 pedidos válidos">${progressBar}</span><p>Progresso do cartão: ${points}/10${points === 10 ? ' · recompensa conquistada' : ` · faltam ${10 - points} pedido(s)`}</p><p>${account.queuedPoints} ponto(s) aguardando próximo ciclo${account.reviewRequired ? ' · revisão pendente' : ''}</p><ul>${rewardRows || '<li>Nenhuma recompensa emitida.</li>'}</ul>${reviews}</article>`;
+      const progressBar = `${'🟦'.repeat(points)}${'⬜'.repeat(10 - points)}`;
+      return `<article class="fidelity-admin-card"><div><strong>WhatsApp ${escapeHtml(account.phoneNormalized)}</strong><span>${account.validOrdersCount} pedidos validados no histórico · ${account.rewards.length} recompensa(s) conquistada(s)</span></div><span class="fidelity-admin-stamps" aria-label="Progresso: ${points} de 10 pedidos">${progressBar}</span><p>Progresso do cartão: ${points}/10${points === 10 ? ' · aguardando validação se houver crédito provisório' : ` · faltam ${10 - points} pedido(s)`}</p><p>${account.queuedPoints} ponto(s) aguardando próximo ciclo${account.reviewRequired ? ' · revisão pendente' : ''}</p><ul>${credits || '<li>Nenhum pedido contabilizado.</li>'}</ul><ul>${rewardRows || '<li>Nenhuma recompensa emitida.</li>'}</ul>${reviews}</article>`;
     }).join('') : '<p>Nenhum cartão criado ainda. Um cartão aparece após o cliente registrar um pedido.</p>';
   } catch (error) {
     $('[data-fidelity-accounts]').innerHTML = `<p class="form-message">${escapeHtml(error.message)}</p>`;

@@ -109,6 +109,24 @@ try {
     return { response, result };
   };
 
+  const createPixOrder = async (phone, items, checkoutToken) => {
+    const body = {
+      customerName: 'Cliente Pix fidelidade',
+      phone,
+      deliveryMethod: 'PICKUP',
+      paymentMethod: 'PIX',
+      items: JSON.stringify(items.map(([index, quantity]) => ({ productId: products[index].id, quantity }))),
+      checkoutToken
+    };
+    const form = new FormData();
+    for (const [key, value] of Object.entries(body)) form.append(key, value);
+    form.append('proof', new Blob([Buffer.from('%PDF-1.4\nfidelity-pix-test')], { type: 'application/pdf' }), 'receipt.pdf');
+    const response = await fetch(`${baseUrl}/api/orders`, { method: 'POST', body: form });
+    const result = await response.json();
+    assert.ok(response.status === 201 || response.status === 200, JSON.stringify(result));
+    return { response, result };
+  };
+
   const status = async (orderId, nextStatus, expected = 200) => {
     const response = await fetch(`${baseUrl}/api/admin/orders/${orderId}/status`, {
       method: 'PATCH',
@@ -128,6 +146,49 @@ try {
     }
     return result.order;
   };
+
+  const pixTokens = [
+    'a7171e66-d327-4238-a048-c656afbb27fb',
+    '6f708365-1ad2-45c2-bff1-5724f9ea2d91'
+  ];
+  const firstPixOrder = await createPixOrder('84977770001', [[0, 1]], pixTokens[0]);
+  assert.equal(firstPixOrder.result.fidelity.points, 1, 'Pix proof adds an immediate provisional stamp');
+  assert.equal(firstPixOrder.result.fidelity.provisionalPoints, 1);
+  assert.equal(firstPixOrder.result.fidelity.validOrdersCount, 0, 'provisional credit is not yet a validated order');
+  const duplicatePixOrder = await createPixOrder('84977770001', [[0, 1]], pixTokens[0]);
+  assert.equal(duplicatePixOrder.result.order.id, firstPixOrder.result.order.id, 'repeated Pix checkout token resolves to the same order');
+  assert.equal(duplicatePixOrder.result.fidelity.points, 1, 'repeated Pix checkout does not issue another provisional stamp');
+  const storedProgress = await fetch(`${baseUrl}/api/fidelity/progress?checkoutToken=${pixTokens[0]}`);
+  assert.equal(storedProgress.status, 200, 'customer can restore the card using its private checkout token');
+  assert.equal((await storedProgress.json()).points, 1);
+  const secondPixOrder = await createPixOrder('84977770001', [[1, 1]], pixTokens[1]);
+  assert.equal(secondPixOrder.result.fidelity.points, 2, 'subsequent Pix proofs immediately add the next stamp');
+  assert.equal(secondPixOrder.result.fidelity.provisionalPoints, 2);
+  const rejectPix = await fetch(`${baseUrl}/api/admin/orders/${firstPixOrder.result.order.id}/proof-status`, {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'REJECTED' })
+  });
+  assert.equal(rejectPix.status, 200);
+  let pixAccount = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84977770001' } });
+  assert.equal(pixAccount.points, 1, 'rejecting one order removes only its linked provisional stamp');
+  assert.equal(pixAccount.validOrdersCount, 0);
+  assert.equal(await prisma.fidelityEvent.findUnique({ where: { idempotencyKey: `order-earned:${firstPixOrder.result.order.id}` } }).then(event => event.creditStatus), 'REJECTED');
+  const confirmPix = await fetch(`${baseUrl}/api/admin/orders/${secondPixOrder.result.order.id}/proof-status`, {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'CONFIRMED' })
+  });
+  assert.equal(confirmPix.status, 200);
+  const confirmedEvent = await prisma.fidelityEvent.findUnique({ where: { idempotencyKey: `order-earned:${secondPixOrder.result.order.id}` } });
+  assert.equal(confirmedEvent.creditStatus, 'CONFIRMED');
+  pixAccount = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84977770001' } });
+  assert.equal(pixAccount.points, 1, 'confirming the payment promotes but does not duplicate the provisional stamp');
+  await status(secondPixOrder.result.order.id, 'COMPLETED');
+  await status(secondPixOrder.result.order.id, 'COMPLETED');
+  pixAccount = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84977770001' } });
+  assert.equal(pixAccount.points, 1, 'completing a confirmed Pix order does not add a second stamp');
+  assert.equal(pixAccount.validOrdersCount, 1, 'the order enters the validated count once after completion');
 
   const firstOrderResponse = await createOrder('84999999999', [[0, 5]]);
   assert.equal(firstOrderResponse.result.fidelity.points, 0, 'pending order does not increase the public message counter');
@@ -158,7 +219,7 @@ try {
   account = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84999999999' } });
   assert.equal(account.points, 2, 'two different products still grant one stamp, without duplicate status awards');
   assert.equal(account.validOrdersCount, 2);
-  assert.equal(await prisma.fidelityAccount.count(), 1, 'phone formatting does not create another card');
+  assert.equal(await prisma.fidelityAccount.count({ where: { phoneNormalized: '84999999999' } }), 1, 'phone formatting does not create another card');
 
   await completeOrder('84999999999', [[1, 1]]);
   await completeOrder('84999999999', [[0, 2], [1, 1]]);
@@ -245,15 +306,39 @@ try {
   const secondCustomerOrder = await completeOrder('84988887777', [[0, 1]]);
   assert.equal(Object.hasOwn(secondCustomerOrder, 'phoneNormalized'), false, 'normalized phone identifier is not returned to public clients');
   const accounts = await prisma.fidelityAccount.findMany();
-  assert.equal(accounts.length, 2, 'different customer phone numbers have independent cards');
+  assert.equal(accounts.length, 3, 'different customer phone numbers have independent cards');
   const secondAccount = accounts.find(item => item.phoneNormalized === '84988887777');
   assert.equal(secondAccount.points, 1);
   assert.equal(secondAccount.validOrdersCount, 1);
+
+  const rewardTokens = Array.from({ length: 10 }, (_, index) => `b0000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`);
+  const rewardPixOrders = [];
+  for (const token of rewardTokens) rewardPixOrders.push(await createPixOrder('84966665555', [[0, 1]], token));
+  let rewardTestAccount = await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84966665555' } });
+  assert.equal(rewardTestAccount.points, 10);
+  assert.equal(rewardTestAccount.validOrdersCount, 0);
+  assert.equal(await prisma.fidelityReward.count({ where: { accountId: rewardTestAccount.id } }), 0, 'ten provisional stamps do not issue a free-order reward');
+  for (const pixOrder of rewardPixOrders) {
+    const confirmation = await fetch(`${baseUrl}/api/admin/orders/${pixOrder.result.order.id}/proof-status`, {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'CONFIRMED' })
+    });
+    assert.equal(confirmation.status, 200);
+  }
+  assert.equal(await prisma.fidelityReward.count({ where: { accountId: rewardTestAccount.id } }), 0, 'payment confirmation alone does not issue the reward before order completion');
+  for (const pixOrder of rewardPixOrders) await status(pixOrder.result.order.id, 'COMPLETED');
+  rewardTestAccount = await prisma.fidelityAccount.findUnique({ where: { id: rewardTestAccount.id } });
+  assert.equal(rewardTestAccount.validOrdersCount, 10);
+  assert.equal(await prisma.fidelityReward.count({ where: { accountId: rewardTestAccount.id, status: 'AVAILABLE' } }), 1, 'the tenth confirmed and completed order issues one reward');
 
   const cancelled = await createOrder('84977776666', [[0, 1]]);
   await status(cancelled.result.order.id, 'CANCELLED');
   assert.equal(await prisma.fidelityAccount.findUnique({ where: { phoneNormalized: '84977776666' } }).then(item => item.points), 0, 'an uncompleted cancelled order earns no point');
 
+  const pendingPixToken = 'ff9ffbe5-5ff8-4d6c-9046-bfaebea690e4';
+  const pendingPixOrder = await createPixOrder('84977770003', [[0, 1]], pendingPixToken);
+  assert.equal(pendingPixOrder.result.fidelity.provisionalPoints, 1);
   await stopServer();
   const restartedBaseUrl = await startServer();
   const persistedCardsResponse = await fetch(`${restartedBaseUrl}/api/admin/fidelity`, { headers: { Cookie: cookie } });
@@ -261,6 +346,18 @@ try {
   const persistedCard = (await persistedCardsResponse.json()).find(item => item.phoneNormalized === '84999999999');
   assert.equal(persistedCard.validOrdersCount, 12, 'server restart does not erase the loyalty history');
   assert.equal(persistedCard.rewards.length, 1);
+  const persistedPixProgress = await fetch(`${restartedBaseUrl}/api/fidelity/progress?checkoutToken=${pixTokens[1]}`);
+  assert.equal(persistedPixProgress.status, 200, 'provisional/confirmed Pix card access survives server restart');
+  const restoredPixProgress = await persistedPixProgress.json();
+  assert.equal(restoredPixProgress.points, 1);
+  assert.equal(restoredPixProgress.provisionalPoints, 0);
+  assert.equal(restoredPixProgress.validOrdersCount, 1);
+  const persistedPendingPix = await fetch(`${restartedBaseUrl}/api/fidelity/progress?checkoutToken=${pendingPixToken}`);
+  assert.equal(persistedPendingPix.status, 200, 'provisional credits remain persisted after server restart');
+  const restoredPendingPix = await persistedPendingPix.json();
+  assert.equal(restoredPendingPix.points, 1);
+  assert.equal(restoredPendingPix.provisionalPoints, 1);
+  assert.equal(restoredPendingPix.validOrdersCount, 0);
 
   console.log('Digital loyalty eligibility, per-order idempotency, rewards, cancellation review, phone normalization, and account separation passed.');
 } finally {

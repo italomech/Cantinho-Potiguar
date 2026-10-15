@@ -111,6 +111,8 @@ model FidelityEvent {
   bucket         FidelityPointBucket?
   cycle          Int?
   pointsDelta    Int                @default(0)
+  creditStatus   FidelityCreditStatus @default(CONFIRMED)
+  validOrderCountedAt DateTime?
   idempotencyKey String             @unique
   note           String?
   createdBy      String?
@@ -223,4 +225,10 @@ enum FidelityEventType {
 enum FidelityPointBucket {
   ACTIVE
   QUEUED
+}
+
+enum FidelityCreditStatus {
+  PROVISIONAL
+  CONFIRMED
+  REJECTED
 }

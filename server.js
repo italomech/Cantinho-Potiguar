@@ -208,12 +208,19 @@ async function fidelityAccountForPhone(client, phoneNormalized) {
 async function fidelitySummary(client, phoneNormalized) {
   const account = await client.fidelityAccount.findUnique({
     where: { phoneNormalized },
-    include: { rewards: { select: { status: true } } }
+    include: {
+      rewards: { select: { status: true } },
+      events: {
+        where: { type: 'POINT_EARNED', bucket: 'ACTIVE', creditStatus: 'PROVISIONAL' },
+        select: { id: true }
+      }
+    }
   });
   if (!account) return null;
   return {
     goal: 10,
     points: account.points,
+    provisionalPoints: account.events.length,
     queuedPoints: account.queuedPoints,
     validOrdersCount: account.validOrdersCount,
     rewardsEarned: account.rewards.length,
@@ -221,6 +228,39 @@ async function fidelitySummary(client, phoneNormalized) {
     rewardAvailable: account.rewards.some(reward => reward.status === 'AVAILABLE'),
     rewardUnderReview: account.reviewRequired || account.rewards.some(reward => reward.status === 'REVIEW_REQUIRED')
   };
+}
+async function recordProvisionalPixCredit(client, order, actor = null) {
+  if (!order.phoneNormalized || order.paymentMethod !== 'PIX' || !order.pixProofUrl) return;
+  const idempotencyKey = `order-earned:${order.id}`;
+  if (await client.fidelityEvent.findUnique({ where: { idempotencyKey } })) return;
+  const account = await fidelityAccountForPhone(client, order.phoneNormalized);
+  const activeReward = await client.fidelityReward.findFirst({
+    where: { accountId: account.id, status: { in: ['AVAILABLE', 'REVIEW_REQUIRED'] } },
+    orderBy: { cycle: 'desc' }
+  });
+  const latestReward = await client.fidelityReward.findFirst({ where: { accountId: account.id }, orderBy: { cycle: 'desc' } });
+  const cycle = (activeReward?.cycle || latestReward?.cycle || 0) + 1;
+  const bucket = activeReward || account.reviewRequired ? 'QUEUED' : 'ACTIVE';
+  await client.fidelityAccount.update({
+    where: { id: account.id },
+    data: bucket === 'QUEUED'
+      ? { queuedPoints: { increment: 1 } }
+      : { points: Math.min(10, account.points + 1) }
+  });
+  await client.fidelityEvent.create({
+    data: {
+      accountId: account.id,
+      orderId: order.id,
+      type: 'POINT_EARNED',
+      bucket,
+      cycle,
+      pointsDelta: 1,
+      creditStatus: 'PROVISIONAL',
+      idempotencyKey,
+      note: 'Crédito provisório aguardando conferência do comprovante Pix.',
+      createdBy: actor
+    }
+  });
 }
 async function issueFidelityReward(client, account, cycle, actor = null) {
   const reward = await client.fidelityReward.create({ data: { accountId: account.id, cycle } });
@@ -237,6 +277,21 @@ async function issueFidelityReward(client, account, cycle, actor = null) {
   });
   return reward;
 }
+async function issueFidelityRewardIfReady(client, account, cycle, actor = null) {
+  if (account.points !== 10) return;
+  const activeReward = await client.fidelityReward.findFirst({
+    where: { accountId: account.id, status: { in: ['AVAILABLE', 'REVIEW_REQUIRED'] } }
+  });
+  if (activeReward) return;
+  const provisionalCredits = await client.fidelityEvent.count({
+    where: { accountId: account.id, cycle, type: 'POINT_EARNED', creditStatus: 'PROVISIONAL' }
+  });
+  if (provisionalCredits > 0) return;
+  const existingReward = await client.fidelityReward.findUnique({
+    where: { accountId_cycle: { accountId: account.id, cycle } }
+  });
+  if (!existingReward) await issueFidelityReward(client, account, cycle, actor);
+}
 async function releaseQueuedFidelityPoints(client, account, actor = null) {
   const activeReward = await client.fidelityReward.findFirst({
     where: { accountId: account.id, status: { in: ['AVAILABLE', 'REVIEW_REQUIRED'] } }
@@ -249,7 +304,7 @@ async function releaseQueuedFidelityPoints(client, account, actor = null) {
     where: { id: account.id },
     data: { points, queuedPoints: account.queuedPoints - usedQueued }
   });
-  if (points === 10) await issueFidelityReward(client, updatedAccount, (latestReward?.cycle || 0) + 1, actor);
+  if (points === 10) await issueFidelityRewardIfReady(client, updatedAccount, (latestReward?.cycle || 0) + 1, actor);
   return updatedAccount;
 }
 async function recordFidelityOrder(client, order, actor = null) {
@@ -257,7 +312,14 @@ async function recordFidelityOrder(client, order, actor = null) {
   const isEligible = order.orderStatus === 'COMPLETED' && order.paymentStatus === 'APPROVED';
   const earnedKey = `order-earned:${order.id}`;
   const reversedKey = `order-reversed:${order.id}`;
-  const earned = await client.fidelityEvent.findUnique({ where: { idempotencyKey: earnedKey } });
+  let earned = await client.fidelityEvent.findUnique({ where: { idempotencyKey: earnedKey } });
+
+  if (earned && earned.creditStatus === 'PROVISIONAL' && order.paymentStatus === 'APPROVED') {
+    earned = await client.fidelityEvent.update({
+      where: { id: earned.id },
+      data: { creditStatus: 'CONFIRMED', note: 'Comprovante Pix conferido pela equipe.' }
+    });
+  }
 
   if (isEligible && !earned) {
     const account = await fidelityAccountForPhone(client, order.phoneNormalized);
@@ -282,19 +344,61 @@ async function recordFidelityOrder(client, order, actor = null) {
         bucket,
         cycle,
         pointsDelta: 1,
+        creditStatus: 'CONFIRMED',
+        validOrderCountedAt: new Date(),
         idempotencyKey: earnedKey,
         note: 'Pedido pago e concluído.',
         createdBy: actor
       }
     });
-    if (bucket === 'ACTIVE' && updatedAccount.points === 10) await issueFidelityReward(client, updatedAccount, cycle, actor);
+    if (bucket === 'ACTIVE') await issueFidelityRewardIfReady(client, updatedAccount, cycle, actor);
     return;
   }
 
-  if (order.orderStatus !== 'CANCELLED' || !earned || await client.fidelityEvent.findUnique({ where: { idempotencyKey: reversedKey } })) return;
+  if (earned && earned.creditStatus !== 'REJECTED' && isEligible && !earned.validOrderCountedAt) {
+    const account = await client.fidelityAccount.update({
+      where: { id: earned.accountId },
+      data: { validOrdersCount: { increment: 1 } }
+    });
+    earned = await client.fidelityEvent.update({
+      where: { id: earned.id },
+      data: { validOrderCountedAt: new Date() }
+    });
+    await issueFidelityRewardIfReady(client, account, earned.cycle, actor);
+    return;
+  }
+
+  if (order.orderStatus !== 'CANCELLED' || !earned || earned.creditStatus === 'REJECTED' || await client.fidelityEvent.findUnique({ where: { idempotencyKey: reversedKey } })) return;
 
   const account = await client.fidelityAccount.findUnique({ where: { id: earned.accountId } });
   if (!account) return;
+  if (!earned.validOrderCountedAt) {
+    const updatedAccount = await client.fidelityAccount.update({
+      where: { id: account.id },
+      data: earned.bucket === 'QUEUED'
+        ? { queuedPoints: Math.max(0, account.queuedPoints - 1) }
+        : { points: Math.max(0, account.points - 1) }
+    });
+    await client.fidelityEvent.update({
+      where: { id: earned.id },
+      data: { creditStatus: 'REJECTED', note: 'Crédito removido após rejeição ou cancelamento do pedido.' }
+    });
+    await client.fidelityEvent.create({
+      data: {
+        accountId: account.id,
+        orderId: order.id,
+        type: 'POINT_REVERSED',
+        bucket: earned.bucket,
+        cycle: earned.cycle,
+        pointsDelta: -1,
+        idempotencyKey: reversedKey,
+        note: 'Crédito provisório removido após rejeição ou cancelamento do pedido.',
+        createdBy: actor
+      }
+    });
+    await releaseQueuedFidelityPoints(client, updatedAccount, actor);
+    return;
+  }
   const reward = earned.cycle == null ? null : await client.fidelityReward.findUnique({
     where: { accountId_cycle: { accountId: account.id, cycle: earned.cycle } }
   });
@@ -727,6 +831,16 @@ app.get('/api/settings', async (_req, res) => {
   const pix = await manualPixPayment();
   res.json({ deliveryFee: money(setting?.deliveryFeeCents || 0), pix });
 });
+app.get('/api/fidelity/progress', async (req, res) => {
+  const parsed = z.string().uuid().safeParse(req.query.checkoutToken);
+  if (!parsed.success) return res.status(400).json({ error: 'Token do cartão inválido.' });
+  const order = await prisma.order.findUnique({
+    where: { checkoutToken: parsed.data },
+    select: { phoneNormalized: true }
+  });
+  if (!order?.phoneNormalized) return res.status(404).json({ error: 'Não foi possível localizar o cartão deste pedido.' });
+  res.json(await fidelitySummary(prisma, order.phoneNormalized));
+});
 
 function handleProofUpload(req, res, next) {
   proofUpload.single('proof')(req, res, error => {
@@ -811,14 +925,18 @@ app.post('/api/orders/:id/proof', handleProofUpload, async (req, res) => {
     await fs.promises.rename(proofPath, safeProofPath);
     proofPath = safeProofPath;
     const proofUrl = `/uploads/${safeFilename}`;
-    const updatedOrder = await prisma.order.update({
-      where: { id: order.id },
-      data: {
-        pixProofUrl: proofUrl,
-        pixProofMime: proofType.mime,
-        pixProofStatus: 'SENT',
-        pixProofUploadedAt: new Date()
-      }
+    const updatedOrder = await prisma.$transaction(async transaction => {
+      const saved = await transaction.order.update({
+        where: { id: order.id },
+        data: {
+          pixProofUrl: proofUrl,
+          pixProofMime: proofType.mime,
+          pixProofStatus: 'SENT',
+          pixProofUploadedAt: new Date()
+        }
+      });
+      await recordProvisionalPixCredit(transaction, saved, 'customer');
+      return saved;
     });
     res.json({ orderId: updatedOrder.id, proofUrl, proofStatus: 'SENT' });
   } catch (error) {
@@ -905,7 +1023,7 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
       if (input.paymentMethod === 'CASH' && input.cashTenderedCents != null && input.cashTenderedCents < calculated.totalCents) {
         throw new OrderValidationError('INSUFFICIENT_CASH', 'O valor informado para troco deve ser igual ou superior ao total do pedido.', 400);
       }
-      return transaction.order.create({ data: {
+      const createdOrder = await transaction.order.create({ data: {
         customerName: input.customerName, phone: input.phone, phoneNormalized, deliveryMethod: input.deliveryMethod,
         address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,
         neighborhood: input.neighborhood || null, reference: input.reference || null, paymentMethod: input.paymentMethod,
@@ -919,6 +1037,8 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
         ...(proofType ? { pixProofUrl, pixProofMime: proofType.mime, pixProofStatus: 'SENT', pixProofUploadedAt: new Date() } : {}),
         items: { create: calculated.items }
       }, include: { items: true } });
+      await recordProvisionalPixCredit(transaction, createdOrder, 'customer');
+      return createdOrder;
     });
     proofPath = null;
 
@@ -1143,6 +1263,8 @@ app.patch('/api/admin/orders/:id/proof-status', requireAdmin, async (req, res) =
   const order = await prisma.order.findUnique({ where: { id: req.params.id }, include: { items: true } });
   if (!order) return res.status(404).json({ error: 'Pedido nao encontrado.' });
   if (order.paymentMethod !== 'PIX' || !order.pixProofUrl) return res.status(409).json({ error: 'Este pedido não possui comprovante Pix para conferência.' });
+  if (parsed.data.status === 'CONFIRMED' && order.pixProofStatus === 'REJECTED') return res.status(409).json({ error: 'Um comprovante recusado não pode ser confirmado novamente.' });
+  if (parsed.data.status === 'REJECTED' && order.pixProofStatus === 'REJECTED') return res.status(409).json({ error: 'Este comprovante já foi recusado.' });
   const nextStatus = parsed.data.status === 'CONFIRMED' ? { paymentStatus: 'APPROVED', orderStatus: 'PAID', pixProofStatus: 'CONFIRMED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' } : { paymentStatus: 'REJECTED', orderStatus: 'CANCELLED', pixProofStatus: 'REJECTED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' };
   const updated = await prisma.$transaction(async transaction => {
     const saved = await transaction.order.update({ where: { id: order.id }, data: nextStatus, include: { items: true } });
@@ -1156,8 +1278,13 @@ app.get('/api/admin/fidelity', requireAdmin, async (_req, res) => {
     include: {
       rewards: { orderBy: { cycle: 'desc' } },
       events: {
-        where: { type: 'POINT_REVERSED', pointsDelta: 0, resolvedAt: null },
-        include: { order: { select: { number: true, orderStatus: true, paymentStatus: true } } },
+        where: {
+          OR: [
+            { type: 'POINT_EARNED' },
+            { type: 'POINT_REVERSED', pointsDelta: 0, resolvedAt: null }
+          ]
+        },
+        include: { order: { select: { number: true, orderStatus: true, paymentStatus: true, pixProofUrl: true, pixProofStatus: true } } },
         orderBy: { createdAt: 'desc' }
       }
     },
