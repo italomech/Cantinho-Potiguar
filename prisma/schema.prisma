@@ -42,6 +42,7 @@ model Order {
   updatedAt             DateTime        @updatedAt
   customerName          String
   phone                 String
+  phoneNormalized       String?
   deliveryMethod        DeliveryMethod
   address               String?
   addressNumber         String?
@@ -70,6 +71,59 @@ model Order {
   whatsappSentAt        DateTime?
   whatsappMessageId     String?
   items                 OrderItem[]
+  loyaltyEvents         FidelityEvent[]
+}
+
+model FidelityAccount {
+  id              String          @id @default(cuid())
+  phoneNormalized String          @unique
+  points          Int             @default(0)
+  queuedPoints    Int             @default(0)
+  validOrdersCount Int            @default(0)
+  reviewRequired  Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  rewards         FidelityReward[]
+  events          FidelityEvent[]
+}
+
+model FidelityReward {
+  id          String             @id @default(cuid())
+  accountId   String
+  cycle       Int
+  status      FidelityRewardStatus @default(AVAILABLE)
+  createdAt   DateTime           @default(now())
+  redeemedAt  DateTime?
+  redeemedBy  String?
+  account     FidelityAccount    @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  events      FidelityEvent[]
+
+  @@unique([accountId, cycle])
+  @@index([accountId, status])
+}
+
+model FidelityEvent {
+  id             String             @id @default(cuid())
+  accountId      String
+  orderId        String?
+  rewardId       String?
+  type           FidelityEventType
+  bucket         FidelityPointBucket?
+  cycle          Int?
+  pointsDelta    Int                @default(0)
+  idempotencyKey String             @unique
+  note           String?
+  createdBy      String?
+  reviewResolution String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  createdAt      DateTime           @default(now())
+  account        FidelityAccount    @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  order          Order?             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reward         FidelityReward?    @relation(fields: [rewardId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+  @@index([orderId])
 }
 
 model CashMovement {
@@ -149,4 +203,24 @@ enum PixProofStatus {
   SENT
   CONFIRMED
   REJECTED
+}
+
+enum FidelityRewardStatus {
+  AVAILABLE
+  REVIEW_REQUIRED
+  REDEEMED
+  REVOKED
+}
+
+enum FidelityEventType {
+  POINT_EARNED
+  POINT_REVERSED
+  POINT_ADJUSTED
+  REWARD_ISSUED
+  REWARD_REDEEMED
+}
+
+enum FidelityPointBucket {
+  ACTIVE
+  QUEUED
 }

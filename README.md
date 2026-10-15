@@ -56,6 +56,16 @@ Os endpoints de Checkout Pro e webhook permanecem no backend para compatibilidad
 
 O backend consulta produtos, precos e taxa no banco; nunca aceita o total enviado pelo navegador. O pagamento Pix e confirmado pela equipe no Admin apos conferir o comprovante.
 
+## Cartao fidelidade
+
+Cada telefone brasileiro normalizado identifica um cartao. Um pedido concede um ponto uma unica vez, somente quando `paymentStatus` esta `APPROVED` e `orderStatus` esta `COMPLETED`; quantidade de itens, comprovante enviado ou criacao do pedido nao contam como confirmacao. A decima compra valida emite uma recompensa de um pedido gratis. Pedidos validos feitos enquanto essa recompensa aguarda resgate ficam guardados para o ciclo seguinte.
+
+O painel `/admin` lista os cartoes, permite registrar resgates e exige uma justificativa para resolver cancelamentos que afetem pontos ou recompensas. Um cancelamento antes da emissao da recompensa estorna o ponto; se a recompensa ja foi emitida ou resgatada, o saldo e congelado para revisao administrativa. A equipe deve conferir as regras e produtos elegiveis antes de conceder o pedido gratis.
+
+Por seguranca, o progresso nao e consultavel publicamente apenas digitando um telefone: nao ha verificacao de titularidade por codigo/OTP no sistema. O cliente deve solicitar a consulta a equipe pelo WhatsApp oficial. As respostas publicas de pedidos nao incluem o telefone normalizado nem o saldo de fidelidade; a consulta detalhada exige acesso administrativo.
+
+A migracao `0006_digital_loyalty_card` e aditiva. Na inicializacao, pedidos antigos com telefone valido sao associados ao cartao e apenas os que ja estao pagos e concluidos sao considerados no historico. Execute `npm run test:fidelity` para testar elegibilidade, idempotencia, ciclos, cancelamentos e resgates em um banco temporario.
+
 ## Producao
 
 - Use um servidor Node (Render, Railway, Fly.io, VPS ou equivalente) com HTTPS.

@@ -415,6 +415,11 @@ function formatCustomerOrderMessage(order) {
 		lines.push(`Troco para: ${money(order.cashTenderedCents / 100)}`, `Troco estimado: ${money(order.cashChangeCents / 100)}`);
 	}
 	if (order.paymentMethod === 'PIX') lines.push(`Comprovante Pix: ${proofUrl || 'arquivo salvo no pedido'}`);
+	lines.push(
+		'',
+		'CARTÃO FIDELIDADE',
+		'Este pedido só contará após a confirmação do pagamento e a conclusão pela equipe. Fale com a equipe para consultar seu progresso.'
+	);
 	return lines.join('\n');
 }
 

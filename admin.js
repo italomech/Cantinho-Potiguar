@@ -46,8 +46,38 @@ async function refresh() {
     renderProducts();
     const settings = await request('/api/admin/settings');
     $('[data-settings-form] input').value = settings.deliveryFeeCents;
+    await refreshFidelity();
   } catch (error) {
     $('[data-orders]').innerHTML = `<p class="form-message">${error.message}</p>`;
+  }
+}
+
+async function refreshFidelity() {
+  try {
+    const accounts = await request('/api/admin/fidelity');
+    $('[data-fidelity-accounts]').innerHTML = accounts.length ? accounts.map(account => {
+      const rewardRows = account.rewards.map(reward => {
+        const status = {
+          AVAILABLE: 'Disponível para resgate',
+          REVIEW_REQUIRED: 'Em revisão — resgate bloqueado',
+          REDEEMED: `Resgatada em ${new Date(reward.redeemedAt).toLocaleString('pt-BR')}`,
+          REVOKED: 'Revogada após revisão administrativa'
+        }[reward.status] || reward.status;
+        const reviewEvent = account.events.find(event => event.rewardId === reward.id);
+        const actions = reviewEvent
+          ? `<div class="fidelity-review-actions"><button class="btn btn-secondary" type="button" data-resolve-review data-event-id="${escapeHtml(reviewEvent.id)}" data-resolution="HONOR">Manter recompensa</button><button class="btn btn-secondary btn-danger" type="button" data-resolve-review data-event-id="${escapeHtml(reviewEvent.id)}" data-resolution="REVOKE">${reward.status === 'REDEEMED' ? 'Registrar estorno' : 'Revogar e estornar 1 ponto'}</button></div>`
+          : reward.status === 'AVAILABLE'
+            ? `<button class="btn btn-secondary" type="button" data-redeem-reward="${escapeHtml(reward.id)}">Registrar resgate</button>`
+            : '';
+        return `<li><span>Ciclo ${reward.cycle}: ${escapeHtml(status)}</span>${actions}</li>`;
+      }).join('');
+      const reviews = account.events.filter(event => !event.rewardId).map(event =>
+        `<article class="fidelity-review"><p>Pedido #${event.order?.number || '—'} cancelado após contagem. O saldo está preservado até revisão.</p><button class="btn btn-secondary" data-resolve-review data-event-id="${escapeHtml(event.id)}" data-resolution="HONOR">Manter saldo</button><button class="btn btn-secondary btn-danger" data-resolve-review data-event-id="${escapeHtml(event.id)}" data-resolution="REVOKE">Estornar ponto</button></article>`
+      ).join('');
+      return `<article class="fidelity-admin-card"><div><strong>WhatsApp ${escapeHtml(account.phoneNormalized)}</strong><span>${account.validOrdersCount} pedidos válidos · ${account.points}/10 no ciclo</span></div><p>${account.queuedPoints} ponto(s) aguardando próximo ciclo${account.reviewRequired ? ' · revisão pendente' : ''}</p><ul>${rewardRows || '<li>Nenhuma recompensa emitida.</li>'}</ul>${reviews}</article>`;
+    }).join('') : '<p>Nenhum cartão criado ainda. Um cartão aparece após o cliente registrar um pedido.</p>';
+  } catch (error) {
+    $('[data-fidelity-accounts]').innerHTML = `<p class="form-message">${escapeHtml(error.message)}</p>`;
   }
 }
 
@@ -134,6 +164,7 @@ $('[data-login-form]').addEventListener('submit', async event => {
 $('[data-logout]').addEventListener('click', async () => { await request('/api/admin/logout', { method: 'POST' }); location.reload(); });
 $('[data-refresh]').addEventListener('click', refresh);
 $('[data-cash-refresh]').addEventListener('click', refreshCash);
+$('[data-fidelity-refresh]').addEventListener('click', refreshFidelity);
 
 document.addEventListener('change', async event => {
   if (!event.target.dataset.orderStatus) return;
@@ -251,6 +282,32 @@ document.addEventListener('click', async event => {
     await request(`/api/admin/orders/${rejectButton.dataset.proofReject}/proof-status`, { method: 'PATCH', body: JSON.stringify({ status: 'REJECTED' }) });
     await refresh();
     await refreshCash();
+    return;
+  }
+
+  const redeemButton = event.target.closest('[data-redeem-reward]');
+  if (redeemButton) {
+    if (!confirm('Confirme que a recompensa de um pedido grátis foi utilizada pelo cliente.')) return;
+    try {
+      await request(`/api/admin/fidelity/rewards/${redeemButton.dataset.redeemReward}/redeem`, { method: 'POST', body: '{}' });
+      await refreshFidelity();
+    } catch (error) { alert(error.message); }
+    return;
+  }
+
+  const reviewButton = event.target.closest('[data-resolve-review]');
+  if (reviewButton) {
+    const note = prompt(reviewButton.dataset.resolution === 'HONOR'
+      ? 'Justificativa para manter a recompensa ou o saldo:'
+      : 'Justificativa para revogar a recompensa ou estornar o ponto:');
+    if (!note) return;
+    try {
+      await request(`/api/admin/fidelity/events/${reviewButton.dataset.eventId}/resolve`, {
+        method: 'PATCH',
+        body: JSON.stringify({ resolution: reviewButton.dataset.resolution, note })
+      });
+      await refreshFidelity();
+    } catch (error) { alert(error.message); }
   }
 });
 $('[data-settings-form]').addEventListener('submit', async event => {

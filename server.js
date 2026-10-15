@@ -99,6 +99,9 @@ const customerSchema = z.object({
   cashTenderedCents: z.preprocess(value => value === '' || value == null ? undefined : typeof value === 'string' ? Number(value) : value, z.number().int().min(0).max(100000000).optional()),
   checkoutToken: z.string().uuid().optional(),
   items: z.array(z.object({ productId: z.string().min(1), quantity: z.number().int().min(1).max(30) })).min(1).max(30)
+}).refine(input => Boolean(normalizeCustomerPhone(input.phone)), {
+  path: ['phone'],
+  message: 'Informe um número de WhatsApp brasileiro válido com DDD.'
 });
 const statusSchema = z.object({ status: z.enum(['RECEIVED', 'PAYMENT_PENDING', 'PAID', 'PREPARING', 'OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED']) });
 const cashOpeningDescription = 'Abertura do caixa';
@@ -187,7 +190,148 @@ function pixKeyFromPayload(payload) {
 function orderPayload(order) {
   const safeOrder = { ...order };
   delete safeOrder.checkoutToken;
+  delete safeOrder.phoneNormalized;
   return { ...safeOrder, subtotal: money(order.subtotalCents), deliveryFee: money(order.deliveryFeeCents), total: money(order.totalCents) };
+}
+function normalizeCustomerPhone(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (digits.startsWith('55') && (digits.length === 12 || digits.length === 13)) digits = digits.slice(2);
+  return digits.length === 10 || digits.length === 11 ? digits : null;
+}
+async function fidelityAccountForPhone(client, phoneNormalized) {
+  return client.fidelityAccount.upsert({
+    where: { phoneNormalized },
+    update: {},
+    create: { phoneNormalized }
+  });
+}
+async function issueFidelityReward(client, account, cycle, actor = null) {
+  const reward = await client.fidelityReward.create({ data: { accountId: account.id, cycle } });
+  await client.fidelityEvent.create({
+    data: {
+      accountId: account.id,
+      rewardId: reward.id,
+      type: 'REWARD_ISSUED',
+      cycle,
+      idempotencyKey: `reward-issued:${account.id}:${cycle}`,
+      note: 'Recompensa de um pedido grátis gerada ao completar dez pedidos válidos.',
+      createdBy: actor
+    }
+  });
+  return reward;
+}
+async function releaseQueuedFidelityPoints(client, account, actor = null) {
+  const activeReward = await client.fidelityReward.findFirst({
+    where: { accountId: account.id, status: { in: ['AVAILABLE', 'REVIEW_REQUIRED'] } }
+  });
+  if (account.reviewRequired || activeReward || account.queuedPoints === 0) return account;
+  const latestReward = await client.fidelityReward.findFirst({ where: { accountId: account.id }, orderBy: { cycle: 'desc' } });
+  const points = Math.min(10, account.points + account.queuedPoints);
+  const usedQueued = points - account.points;
+  const updatedAccount = await client.fidelityAccount.update({
+    where: { id: account.id },
+    data: { points, queuedPoints: account.queuedPoints - usedQueued }
+  });
+  if (points === 10) await issueFidelityReward(client, updatedAccount, (latestReward?.cycle || 0) + 1, actor);
+  return updatedAccount;
+}
+async function recordFidelityOrder(client, order, actor = null) {
+  if (!order.phoneNormalized) return;
+  const isEligible = order.orderStatus === 'COMPLETED' && order.paymentStatus === 'APPROVED';
+  const earnedKey = `order-earned:${order.id}`;
+  const reversedKey = `order-reversed:${order.id}`;
+  const earned = await client.fidelityEvent.findUnique({ where: { idempotencyKey: earnedKey } });
+
+  if (isEligible && !earned) {
+    const account = await fidelityAccountForPhone(client, order.phoneNormalized);
+    const activeReward = await client.fidelityReward.findFirst({
+      where: { accountId: account.id, status: { in: ['AVAILABLE', 'REVIEW_REQUIRED'] } },
+      orderBy: { cycle: 'desc' }
+    });
+    const latestReward = await client.fidelityReward.findFirst({ where: { accountId: account.id }, orderBy: { cycle: 'desc' } });
+    const cycle = (activeReward?.cycle || latestReward?.cycle || 0) + 1;
+    const bucket = activeReward || account.reviewRequired ? 'QUEUED' : 'ACTIVE';
+    const updatedAccount = await client.fidelityAccount.update({
+      where: { id: account.id },
+      data: bucket === 'QUEUED'
+        ? { queuedPoints: { increment: 1 }, validOrdersCount: { increment: 1 } }
+        : { points: Math.min(10, account.points + 1), validOrdersCount: { increment: 1 } }
+    });
+    await client.fidelityEvent.create({
+      data: {
+        accountId: account.id,
+        orderId: order.id,
+        type: 'POINT_EARNED',
+        bucket,
+        cycle,
+        pointsDelta: 1,
+        idempotencyKey: earnedKey,
+        note: 'Pedido pago e concluído.',
+        createdBy: actor
+      }
+    });
+    if (bucket === 'ACTIVE' && updatedAccount.points === 10) await issueFidelityReward(client, updatedAccount, cycle, actor);
+    return;
+  }
+
+  if (order.orderStatus !== 'CANCELLED' || !earned || await client.fidelityEvent.findUnique({ where: { idempotencyKey: reversedKey } })) return;
+
+  const account = await client.fidelityAccount.findUnique({ where: { id: earned.accountId } });
+  if (!account) return;
+  const reward = earned.cycle == null ? null : await client.fidelityReward.findUnique({
+    where: { accountId_cycle: { accountId: account.id, cycle: earned.cycle } }
+  });
+  const requiresReview = reward && ['AVAILABLE', 'REVIEW_REQUIRED', 'REDEEMED'].includes(reward.status);
+  const nextAccount = requiresReview
+    ? await client.fidelityAccount.update({ where: { id: account.id }, data: { reviewRequired: true } })
+    : await client.fidelityAccount.update({
+      where: { id: account.id },
+      data: {
+        validOrdersCount: Math.max(0, account.validOrdersCount - 1),
+        ...(earned.bucket === 'QUEUED' && account.queuedPoints > 0
+          ? { queuedPoints: { decrement: 1 } }
+          : { points: Math.max(0, account.points - 1) })
+      }
+    });
+  if (reward && ['AVAILABLE', 'REVIEW_REQUIRED'].includes(reward.status)) {
+    await client.fidelityReward.update({ where: { id: reward.id }, data: { status: 'REVIEW_REQUIRED' } });
+  }
+  await client.fidelityEvent.create({
+    data: {
+      accountId: account.id,
+      orderId: order.id,
+      rewardId: reward?.id,
+      type: 'POINT_REVERSED',
+      bucket: earned.bucket,
+      cycle: earned.cycle,
+      pointsDelta: requiresReview ? 0 : -1,
+      idempotencyKey: reversedKey,
+      note: requiresReview
+        ? 'Pedido cancelado após a recompensa do ciclo ter sido emitida ou resgatada; requer revisão administrativa.'
+        : 'Pedido cancelado antes de gerar uma recompensa.',
+      createdBy: actor
+    }
+  });
+  await releaseQueuedFidelityPoints(client, nextAccount, actor);
+}
+async function backfillLoyaltyForExistingOrders() {
+  const legacyOrders = await prisma.order.findMany({
+    where: { phoneNormalized: null },
+    select: { id: true, phone: true, orderStatus: true, paymentStatus: true },
+    orderBy: { createdAt: 'asc' }
+  });
+  for (const legacyOrder of legacyOrders) {
+    const phoneNormalized = normalizeCustomerPhone(legacyOrder.phone);
+    if (!phoneNormalized) continue;
+    await prisma.$transaction(async transaction => {
+      const order = await transaction.order.update({
+        where: { id: legacyOrder.id },
+        data: { phoneNormalized }
+      });
+      await fidelityAccountForPhone(transaction, phoneNormalized);
+      await recordFidelityOrder(transaction, order, 'legacy-order-backfill');
+    });
+  }
 }
 async function respondWithExistingOrder(res, order) {
   let payment;
@@ -460,7 +604,11 @@ async function syncPayment(paymentId) {
   if (order.paymentId === String(payment.id) && order.paymentStatus === status.paymentStatus && order.orderStatus === status.orderStatus) {
     return order;
   }
-  const updatedOrder = await prisma.order.update({ where: { id: order.id }, data: { paymentId: String(payment.id), ...status } });
+  const updatedOrder = await prisma.$transaction(async transaction => {
+    const updated = await transaction.order.update({ where: { id: order.id }, data: { paymentId: String(payment.id), ...status } });
+    await recordFidelityOrder(transaction, updated, 'mercadopago');
+    return updated;
+  });
   console.log('Mercado Pago: pagamento sincronizado:', String(payment.id), 'pedido:', order.id, 'status:', payment.status || 'unknown');
   return updatedOrder;
 }
@@ -518,7 +666,11 @@ async function syncOrderFromMercadoPago(orderId) {
   if (localOrder.paymentId === String(payment?.id || orderId) && localOrder.paymentStatus === status.paymentStatus && localOrder.orderStatus === status.orderStatus) {
     return localOrder;
   }
-  const updatedOrder = await prisma.order.update({ where: { id: localOrder.id }, data: { paymentId: String(payment?.id || orderId), ...status } });
+  const updatedOrder = await prisma.$transaction(async transaction => {
+    const updated = await transaction.order.update({ where: { id: localOrder.id }, data: { paymentId: String(payment?.id || orderId), ...status } });
+    await recordFidelityOrder(transaction, updated, 'mercadopago');
+    return updated;
+  });
   console.log('Mercado Pago: order sincronizada:', String(orderId), 'pedido:', localOrder.id, 'status:', mercadoPagoOrder.status || 'unknown');
   return updatedOrder;
 }
@@ -672,6 +824,7 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
   }
   try {
     const input = parsed.data;
+    const phoneNormalized = normalizeCustomerPhone(input.phone);
     if (input.checkoutToken) {
       const existingOrder = await prisma.order.findUnique({ where: { checkoutToken: input.checkoutToken }, include: { items: true } });
       if (existingOrder) {
@@ -730,11 +883,12 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     }
     const order = await prisma.$transaction(async transaction => {
       const calculated = await calculateOrder(input, transaction);
+      await fidelityAccountForPhone(transaction, phoneNormalized);
       if (input.paymentMethod === 'CASH' && input.cashTenderedCents != null && input.cashTenderedCents < calculated.totalCents) {
         throw new OrderValidationError('INSUFFICIENT_CASH', 'O valor informado para troco deve ser igual ou superior ao total do pedido.', 400);
       }
       return transaction.order.create({ data: {
-        customerName: input.customerName, phone: input.phone, deliveryMethod: input.deliveryMethod,
+        customerName: input.customerName, phone: input.phone, phoneNormalized, deliveryMethod: input.deliveryMethod,
         address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,
         neighborhood: input.neighborhood || null, reference: input.reference || null, paymentMethod: input.paymentMethod,
         ...(input.checkoutToken ? { checkoutToken: input.checkoutToken } : {}),
@@ -942,7 +1096,11 @@ app.patch('/api/admin/orders/:id/status', requireAdmin, async (req, res) => {
   const data = { orderStatus: parsed.data.status };
   if (['CASH', 'CARD_ON_DELIVERY'].includes(existingOrder.paymentMethod) && parsed.data.status === 'PAID') data.paymentStatus = 'APPROVED';
   if (parsed.data.status === 'CANCELLED') data.paymentStatus = 'CANCELLED';
-  const order = await prisma.order.update({ where: { id: req.params.id }, data, include: { items: true } });
+  const order = await prisma.$transaction(async transaction => {
+    const updated = await transaction.order.update({ where: { id: req.params.id }, data, include: { items: true } });
+    await recordFidelityOrder(transaction, updated, req.admin?.email || 'admin');
+    return updated;
+  });
   res.json(orderPayload(order));
 });
 app.patch('/api/admin/orders/:id/proof-status', requireAdmin, async (req, res) => {
@@ -952,8 +1110,132 @@ app.patch('/api/admin/orders/:id/proof-status', requireAdmin, async (req, res) =
   if (!order) return res.status(404).json({ error: 'Pedido nao encontrado.' });
   if (order.paymentMethod !== 'PIX' || !order.pixProofUrl) return res.status(409).json({ error: 'Este pedido não possui comprovante Pix para conferência.' });
   const nextStatus = parsed.data.status === 'CONFIRMED' ? { paymentStatus: 'APPROVED', orderStatus: 'PAID', pixProofStatus: 'CONFIRMED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' } : { paymentStatus: 'REJECTED', orderStatus: 'CANCELLED', pixProofStatus: 'REJECTED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' };
-  const updated = await prisma.order.update({ where: { id: order.id }, data: nextStatus, include: { items: true } });
+  const updated = await prisma.$transaction(async transaction => {
+    const saved = await transaction.order.update({ where: { id: order.id }, data: nextStatus, include: { items: true } });
+    await recordFidelityOrder(transaction, saved, req.admin?.email || 'admin');
+    return saved;
+  });
   res.json(orderPayload(updated));
+});
+app.get('/api/admin/fidelity', requireAdmin, async (_req, res) => {
+  const accounts = await prisma.fidelityAccount.findMany({
+    include: {
+      rewards: { orderBy: { cycle: 'desc' } },
+      events: {
+        where: { type: 'POINT_REVERSED', pointsDelta: 0, resolvedAt: null },
+        include: { order: { select: { number: true, orderStatus: true, paymentStatus: true } } },
+        orderBy: { createdAt: 'desc' }
+      }
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 100
+  });
+  res.json(accounts);
+});
+app.post('/api/admin/fidelity/rewards/:id/redeem', requireAdmin, async (req, res) => {
+  const reward = await prisma.fidelityReward.findUnique({ where: { id: req.params.id }, include: { account: true } });
+  if (!reward) return res.status(404).json({ error: 'Recompensa nao encontrada.' });
+  if (reward.status !== 'AVAILABLE' || reward.account.reviewRequired) {
+    return res.status(409).json({ error: 'Esta recompensa nao esta liberada para resgate.' });
+  }
+  try {
+    const result = await prisma.$transaction(async transaction => {
+      const redeemed = await transaction.fidelityReward.update({
+        where: { id: reward.id },
+        data: { status: 'REDEEMED', redeemedAt: new Date(), redeemedBy: req.admin?.email || 'admin' }
+      });
+      await transaction.fidelityEvent.create({
+        data: {
+          accountId: reward.accountId,
+          rewardId: reward.id,
+          type: 'REWARD_REDEEMED',
+          cycle: reward.cycle,
+          idempotencyKey: `reward-redeemed:${reward.id}`,
+          note: 'Recompensa resgatada e registrada por administrador.',
+          createdBy: req.admin?.email || 'admin'
+        }
+      });
+      const account = await transaction.fidelityAccount.findUnique({ where: { id: reward.accountId } });
+      const queued = account.queuedPoints;
+      const points = Math.min(10, queued);
+      const queuedPoints = Math.max(0, queued - points);
+      const updatedAccount = await transaction.fidelityAccount.update({
+        where: { id: reward.accountId },
+        data: { points, queuedPoints }
+      });
+      if (points === 10) await issueFidelityReward(transaction, updatedAccount, reward.cycle + 1, req.admin?.email || 'admin');
+      return redeemed;
+    });
+    res.json(result);
+  } catch (error) {
+    if (error.code === 'P2002') return res.status(409).json({ error: 'Esta recompensa ja foi resgatada.' });
+    throw error;
+  }
+});
+app.patch('/api/admin/fidelity/events/:id/resolve', requireAdmin, async (req, res) => {
+  const parsed = z.object({
+    resolution: z.enum(['HONOR', 'REVOKE']),
+    note: z.string().trim().min(5).max(300)
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Informe uma resolucao e justificativa validas.' });
+  const event = await prisma.fidelityEvent.findUnique({ where: { id: req.params.id } });
+  if (!event || event.type !== 'POINT_REVERSED' || event.pointsDelta !== 0) return res.status(404).json({ error: 'Revisao de fidelidade nao encontrada.' });
+  if (event.resolvedAt) return res.status(409).json({ error: 'Esta revisao ja foi resolvida.' });
+  const resolution = parsed.data.resolution === 'HONOR' ? 'HONOR' : 'REVOKE';
+  const resolved = await prisma.$transaction(async transaction => {
+    const updatedEvent = await transaction.fidelityEvent.update({
+      where: { id: event.id },
+      data: {
+        reviewResolution: `${resolution}: ${parsed.data.note}`,
+        resolvedBy: req.admin?.email || 'admin',
+        resolvedAt: new Date()
+      }
+    });
+    const reward = event.rewardId ? await transaction.fidelityReward.findUnique({ where: { id: event.rewardId } }) : null;
+    if (resolution === 'HONOR' && reward?.status === 'REVIEW_REQUIRED') {
+      await transaction.fidelityReward.update({ where: { id: reward.id }, data: { status: 'AVAILABLE' } });
+    }
+    if (resolution === 'REVOKE' && reward) {
+      if (['AVAILABLE', 'REVIEW_REQUIRED'].includes(reward.status)) {
+        await transaction.fidelityReward.update({ where: { id: reward.id }, data: { status: 'REVOKED' } });
+      }
+      if (['AVAILABLE', 'REVIEW_REQUIRED', 'REDEEMED'].includes(reward.status)) {
+        const account = await transaction.fidelityAccount.findUnique({ where: { id: event.accountId } });
+        await transaction.fidelityAccount.update({
+          where: { id: event.accountId },
+          data: {
+            ...(reward.status !== 'REDEEMED' ? { points: Math.max(0, account.points - 1) } : {}),
+            validOrdersCount: Math.max(0, account.validOrdersCount - 1)
+          }
+        });
+        await transaction.fidelityEvent.create({
+          data: {
+            accountId: event.accountId,
+            rewardId: event.rewardId,
+            type: 'POINT_ADJUSTED',
+            cycle: event.cycle,
+            pointsDelta: reward.status !== 'REDEEMED' ? -1 : 0,
+            idempotencyKey: `review-revoke:${event.id}`,
+            note: `Revisão administrativa de pedido cancelado. A recompensa ${reward.status === 'REDEEMED' ? 'já havia sido resgatada e não foi desfeita' : 'foi revogada e um ponto estornado'}. ${parsed.data.note}`,
+            createdBy: req.admin?.email || 'admin'
+          }
+        });
+      }
+    }
+    const unresolved = await transaction.fidelityEvent.count({
+      where: { accountId: event.accountId, type: 'POINT_REVERSED', pointsDelta: 0, resolvedAt: null }
+    });
+    const unresolvedRewards = await transaction.fidelityReward.count({
+      where: { accountId: event.accountId, status: 'REVIEW_REQUIRED' }
+    });
+    const account = await transaction.fidelityAccount.update({
+      where: { id: event.accountId },
+      data: { reviewRequired: unresolved > 0 || unresolvedRewards > 0 }
+    });
+    await releaseQueuedFidelityPoints(transaction, account, req.admin?.email || 'admin');
+    return updatedEvent;
+  });
+  res.json(resolved);
 });
 app.get('/api/admin/products', requireAdmin, async (_req, res) => res.json(await prisma.product.findMany({ orderBy: { createdAt: 'asc' } })));
 async function saveAdminProduct(req, res, create) {
@@ -1110,4 +1392,10 @@ app.use(express.static(__dirname));
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 app.use((_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
-app.listen(port, '0.0.0.0', () => console.log(`Cantinho Potiguar em ${publicUrl}`));
+(async () => {
+  await backfillLoyaltyForExistingOrders();
+  app.listen(port, '0.0.0.0', () => console.log(`Cantinho Potiguar em ${publicUrl}`));
+})().catch(error => {
+  console.error('Falha ao preparar cartoes fidelidade existentes:', error);
+  process.exitCode = 1;
+});
