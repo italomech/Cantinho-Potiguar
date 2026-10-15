@@ -162,6 +162,9 @@ function renderCart() {
 	$('[data-checkout-subtotal]').textContent = money(summary.subtotal);
 	$('[data-checkout-delivery]').textContent = money(summary.delivery);
 	$('[data-checkout-total]').textContent = money(summary.total);
+	$('[data-pix-total]').textContent = money(summary.total);
+	$('[data-checkout-payment]').textContent = paymentMethodLabel(selectedPaymentMethod());
+	updatePaymentSelectionUI();
 	updateNeighborhoodValidation();
 }
 function changeCart(productId, delta) {
@@ -180,6 +183,42 @@ function changeCart(productId, delta) {
 }
 function openCart() { $('[data-cart-panel]').classList.add('is-open'); $('.overlay').classList.add('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'false'); }
 function closeCart() { $('[data-cart-panel]').classList.remove('is-open'); $('.overlay').classList.remove('is-visible'); $('[data-cart-panel]').setAttribute('aria-hidden', 'true'); }
+
+function selectedPaymentMethod() {
+	return document.querySelector('input[name="paymentMethod"]:checked')?.value || 'PIX';
+}
+
+function paymentMethodLabel(method) {
+	return { PIX: 'Pix', CASH: 'Dinheiro na entrega', CARD_ON_DELIVERY: 'Cartão na entrega' }[method] || 'Pix';
+}
+
+function updatePaymentSelectionUI() {
+	const method = selectedPaymentMethod();
+	const isPix = method === 'PIX';
+	const isCash = method === 'CASH';
+	$('[data-pix-payment]').hidden = !isPix;
+	$('[data-pix-proof-field]').hidden = !isPix;
+	$('[data-cash-payment]').hidden = !isCash;
+	$('[data-card-payment]').hidden = method !== 'CARD_ON_DELIVERY';
+	$('[data-checkout-payment]').textContent = paymentMethodLabel(method);
+
+	const noChange = $('[data-no-change]');
+	const tenderInput = $('[data-cash-tendered]');
+	tenderInput.disabled = !isCash || noChange.checked;
+	tenderInput.required = isCash && !noChange.checked;
+	const cashChange = $('[data-cash-change]');
+	if (isCash && !noChange.checked && tenderInput.value) {
+		const tendered = Math.round(parsePrice(tenderInput.value) * 100);
+		const total = Math.round(totals().total * 100);
+		cashChange.textContent = tendered < total
+			? 'O valor informado é inferior ao total do pedido.'
+			: `Troco estimado: ${money((tendered - total) / 100)}`;
+	} else {
+		cashChange.textContent = isCash ? 'Sem troco.' : '';
+	}
+	sendOrderButton.textContent = orderCreated ? 'Pedido registrado' : isPix ? 'Registrar pedido Pix' : 'Registrar pedido';
+	updateSendOrderButton();
+}
 
 function renderPixPayment() {
 	const configured = Boolean(state.pixPayment?.configured);
@@ -212,9 +251,23 @@ document.addEventListener('click', event => {
 document.addEventListener('input', event => { if (event.target.name === 'neighborhood') renderCart(); });
 document.addEventListener('change', event => {
 	if (event.target.name === 'deliveryMethod') { $('[data-address-fields]').hidden = event.target.value === 'PICKUP'; renderCart(); }
+	if (event.target.name === 'paymentMethod' || event.target.matches('[data-no-change]')) updatePaymentSelectionUI();
+});
+document.addEventListener('input', event => {
+	if (event.target.matches('[data-cash-tendered]')) updatePaymentSelectionUI();
 });
 
 const proofInput = $('[data-checkout-form] input[name="pixProof"]');
+const checkoutTokenInput = $('[data-checkout-token]');
+function newCheckoutToken() {
+	if (window.crypto.randomUUID) return window.crypto.randomUUID();
+	const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+	bytes[6] = (bytes[6] & 0x0f) | 0x40;
+	bytes[8] = (bytes[8] & 0x3f) | 0x80;
+	const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+checkoutTokenInput.value = newCheckoutToken();
 const proofStatus = $('[data-pix-proof-status]');
 const proofPreview = $('[data-pix-proof-preview]');
 const proofImage = $('[data-pix-proof-image]');
@@ -224,7 +277,6 @@ const maxProofSize = 10 * 1024 * 1024;
 const proofMimeByExtension = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.pdf': 'application/pdf' };
 let proofPreviewUrl = null;
 let orderCreated = false;
-let orderShared = false;
 let createdOrderMessage = '';
 
 function isSupportedProof(file) {
@@ -235,11 +287,16 @@ function isSupportedProof(file) {
 
 function updateSendOrderButton() {
 	const file = proofInput.files?.[0];
+	const paymentMethod = selectedPaymentMethod();
 	const method = document.querySelector('input[name="deliveryMethod"]:checked')?.value;
 	const neighborhood = document.querySelector('input[name="neighborhood"]')?.value;
 	const blockedNeighborhood = method === 'DELIVERY' && isUnavailableNeighborhood(neighborhood);
 	const unavailableProduct = cartItems().some(({ product }) => !productIsAvailable(product));
-	sendOrderButton.disabled = orderShared || (!orderCreated && (!state.pixPayment?.configured || !file || file.size > maxProofSize || !isSupportedProof(file) || blockedNeighborhood || unavailableProduct));
+	const requiresPixProof = paymentMethod === 'PIX' && (!file || file.size > maxProofSize || !isSupportedProof(file));
+	const cashNeedsChange = paymentMethod === 'CASH' && !$('[data-no-change]').checked;
+	const cashTenderedCents = Math.round(parsePrice($('[data-cash-tendered]').value) * 100);
+	const cashInsufficient = cashNeedsChange && (!cashTenderedCents || cashTenderedCents < Math.round(totals().total * 100));
+	sendOrderButton.disabled = orderCreated || (paymentMethod === 'PIX' && (!state.pixPayment?.configured || requiresPixProof)) || cashInsufficient || blockedNeighborhood || unavailableProduct;
 }
 
 function clearProofPreview() {
@@ -296,6 +353,7 @@ proofInput.addEventListener('change', () => {
 
 function formatCustomerOrderMessage(order) {
 	const proofUrl = order.pixProofUrl ? new URL(order.pixProofUrl, window.location.origin).href : null;
+	const paymentLabel = paymentMethodLabel(order.paymentMethod);
 	const lines = [
 		'🍱 NOVO PEDIDO — CANTINHO POTIGUAR',
 		'',
@@ -321,39 +379,49 @@ function formatCustomerOrderMessage(order) {
 		`Entrega: ${money(order.deliveryFee)}`,
 		`TOTAL: ${money(order.total)}`,
 		'',
-		'Pagamento: PIX',
-		`Comprovante Pix: ${proofUrl || 'arquivo salvo no pedido'}`
+		`Pagamento: ${paymentLabel}`,
+		`Status do pagamento: ${order.paymentStatus === 'APPROVED' ? 'Pago' : 'Pendente'}`
 	);
+	if (order.paymentMethod === 'CASH' && order.cashTenderedCents != null) {
+		lines.push(`Troco para: ${money(order.cashTenderedCents / 100)}`, `Troco estimado: ${money(order.cashChangeCents / 100)}`);
+	}
+	if (order.paymentMethod === 'PIX') lines.push(`Comprovante Pix: ${proofUrl || 'arquivo salvo no pedido'}`);
 	return lines.join('\n');
 }
 
-function openOrderWhatsApp(message) {
+function prepareOrderWhatsAppLink(message) {
 	const whatsappUrl = `https://wa.me/${orderWhatsAppNumber}?text=${encodeURIComponent(message)}`;
-	proofStatus.textContent = 'O comprovante foi salvo no pedido e o link está incluído na mensagem do WhatsApp.';
-	proofStatus.classList.remove('is-error');
-	window.location.assign(whatsappUrl);
+	const whatsappLink = $('[data-order-whatsapp]');
+	whatsappLink.href = whatsappUrl;
+	whatsappLink.hidden = false;
+	if (selectedPaymentMethod() === 'PIX') {
+		proofStatus.textContent = 'O comprovante foi salvo no pedido. Você pode abrir o WhatsApp para enviar os detalhes.';
+		proofStatus.classList.remove('is-error');
+	}
 }
 
 $('[data-checkout-form]').addEventListener('submit', async event => {
 	event.preventDefault();
 	const form = event.currentTarget;
 	const message = $('[data-form-message]');
+	const paymentMethod = selectedPaymentMethod();
 	const proofFile = proofInput.files?.[0];
-	if (orderCreated && createdOrderMessage && proofFile) {
-		openOrderWhatsApp(createdOrderMessage);
-		orderShared = true;
-		updateSendOrderButton();
-		return;
-	}
-	if (!proofFile || sendOrderButton.disabled) return;
+	if (sendOrderButton.disabled) return;
 	message.textContent = 'Registrando seu pedido...';
 	sendOrderButton.disabled = true;
+	sendOrderButton.textContent = 'Registrando pedido...';
 	try {
 		const formData = new FormData(form);
 		formData.delete('pixProof');
-		formData.set('paymentMethod', 'PIX');
+		formData.set('paymentMethod', paymentMethod);
+		formData.set('checkoutToken', checkoutTokenInput.value);
 		formData.set('items', JSON.stringify(cartItems().map(({ product, quantity }) => ({ productId: product.id, quantity: Number(quantity) }))));
-		formData.append('proof', proofFile, proofFile.name);
+		if (paymentMethod === 'PIX') formData.append('proof', proofFile, proofFile.name);
+		if (paymentMethod === 'CASH' && !$('[data-no-change]').checked) {
+			formData.set('cashTenderedCents', String(Math.round(parsePrice($('[data-cash-tendered]').value) * 100)));
+		} else {
+			formData.delete('cashTenderedCents');
+		}
 		const endpoint = '/api/orders';
 		let response;
 		try {
@@ -375,22 +443,28 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 			requestError.response = result;
 			throw requestError;
 		}
-		if (!result.order?.id || !result.order?.pixProofUrl) {
-			console.error('[POST /api/orders] Resposta sem confirmação do pedido ou comprovante', { endpoint, status: response.status, hasOrderId: Boolean(result.order?.id), hasPixProofUrl: Boolean(result.order?.pixProofUrl) });
-			throw new Error('O servidor não confirmou o registro do pedido e do comprovante.');
+		if (!result.order?.id || (paymentMethod === 'PIX' && !result.order?.pixProofUrl)) {
+			console.error('[POST /api/orders] Resposta sem confirmação do pedido ou comprovante Pix', { endpoint, status: response.status, hasOrderId: Boolean(result.order?.id), hasPixProofUrl: Boolean(result.order?.pixProofUrl) });
+			throw new Error('O servidor não confirmou o registro do pedido e do comprovante Pix.');
 		}
 		orderCreated = true;
 		state.cart.clear();
 		renderMenu();
 		renderCart();
-		proofInput.disabled = true;
+		$('[data-checkout-items]').innerHTML = result.order.items.map(item => `<p><span>${item.quantity}x ${escapeHtml(item.productName)}</span><strong>${money(item.unitPriceCents * item.quantity / 100)}</strong></p>`).join('');
+		$('[data-checkout-subtotal]').textContent = money(result.order.subtotal);
+		$('[data-checkout-delivery]').textContent = money(result.order.deliveryFee);
+		$('[data-checkout-total]').textContent = money(result.order.total);
+		$('[data-pix-total]').textContent = money(result.order.total);
+		form.querySelectorAll('input, button[type="submit"]').forEach(input => { input.disabled = true; });
 		message.textContent = `Pedido ${result.order.number ? `#${result.order.number}` : 'registrado'}.`;
-		$('[data-payment-result]').textContent = 'Seu pedido foi registrado e o comprovante foi anexado.';
+		$('[data-payment-result]').textContent = paymentMethod === 'PIX'
+			? 'Pedido registrado. O pagamento continua pendente até a conferência do comprovante.'
+			: 'Pedido registrado. O pagamento será recebido na entrega e continuará pendente até a confirmação pela equipe.';
 		createdOrderMessage = formatCustomerOrderMessage(result.order);
-		openOrderWhatsApp(createdOrderMessage);
-		orderShared = true;
+		prepareOrderWhatsAppLink(createdOrderMessage);
 	} catch (error) {
-		console.error('[POST /api/orders] Fluxo Pix encerrado sem confirmação', {
+		console.error('[POST /api/orders] Checkout encerrado sem confirmação', {
 			endpoint: '/api/orders',
 			method: 'POST',
 			status: error.status ?? null,
@@ -400,7 +474,7 @@ $('[data-checkout-form]').addEventListener('submit', async event => {
 		});
 		message.textContent = error.message;
 	} finally {
-		updateSendOrderButton();
+		if (!orderCreated) updatePaymentSelectionUI();
 	}
 });
 

@@ -23,6 +23,12 @@ import { z } from 'zod';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadDir = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : path.join(__dirname, 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
+if (process.env.NODE_ENV === 'production' && !process.env.UPLOADS_DIR) {
+  console.warn('UPLOADS_DIR nao configurado: fotos de produtos e comprovantes estao no disco local e podem desaparecer em um deploy. Configure um volume persistente.');
+}
+if (process.env.NODE_ENV === 'production' && process.env.DATABASE_URL?.startsWith('file:')) {
+  console.warn('DATABASE_URL usa SQLite: confirme que o arquivo do banco esta em armazenamento persistente ou use PostgreSQL.');
+}
 const app = express();
 const prisma = new PrismaClient();
 const port = Number(process.env.PORT || 3000);
@@ -89,7 +95,9 @@ const customerSchema = z.object({
   complement: z.string().trim().max(100).optional().default(''),
   neighborhood: z.string().trim().max(100).optional().default(''),
   reference: z.string().trim().max(150).optional().default(''),
-  paymentMethod: z.enum(['PIX', 'CARD', 'CASH']),
+  paymentMethod: z.enum(['PIX', 'CARD', 'CASH', 'CARD_ON_DELIVERY']),
+  cashTenderedCents: z.preprocess(value => value === '' || value == null ? undefined : typeof value === 'string' ? Number(value) : value, z.number().int().min(0).max(100000000).optional()),
+  checkoutToken: z.string().uuid().optional(),
   items: z.array(z.object({ productId: z.string().min(1), quantity: z.number().int().min(1).max(30) })).min(1).max(30)
 });
 const statusSchema = z.object({ status: z.enum(['RECEIVED', 'PAYMENT_PENDING', 'PAID', 'PREPARING', 'OUT_FOR_DELIVERY', 'COMPLETED', 'CANCELLED']) });
@@ -177,7 +185,16 @@ function pixKeyFromPayload(payload) {
   return null;
 }
 function orderPayload(order) {
-  return { ...order, subtotal: money(order.subtotalCents), deliveryFee: money(order.deliveryFeeCents), total: money(order.totalCents) };
+  const safeOrder = { ...order };
+  delete safeOrder.checkoutToken;
+  return { ...safeOrder, subtotal: money(order.subtotalCents), deliveryFee: money(order.deliveryFeeCents), total: money(order.totalCents) };
+}
+async function respondWithExistingOrder(res, order) {
+  let payment;
+  if (order.paymentMethod === 'PIX') payment = { ...await manualPixPayment(), status: order.paymentStatus };
+  else if (order.paymentMethod === 'CASH' || order.paymentMethod === 'CARD_ON_DELIVERY') payment = { configured: true, type: order.paymentMethod };
+  else payment = { configured: Boolean(order.preferenceId), type: 'CARD', preferenceId: order.preferenceId };
+  return res.status(200).json({ order: orderPayload(order), payment });
 }
 class OrderValidationError extends Error {
   constructor(code, message, status = 409) {
@@ -655,6 +672,19 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
   }
   try {
     const input = parsed.data;
+    if (input.checkoutToken) {
+      const existingOrder = await prisma.order.findUnique({ where: { checkoutToken: input.checkoutToken }, include: { items: true } });
+      if (existingOrder) {
+        if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+        proofPath = null;
+        return respondWithExistingOrder(res, existingOrder);
+      }
+    }
+    if (input.paymentMethod !== 'CASH' && input.cashTenderedCents != null) {
+      if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+      proofPath = null;
+      return res.status(400).json({ error: 'O valor para troco só pode ser informado para dinheiro na entrega.' });
+    }
     if (!input.items.length) {
       if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
       return res.status(400).json({ error: 'Adicione ao menos um item ao pedido.' });
@@ -700,11 +730,19 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     }
     const order = await prisma.$transaction(async transaction => {
       const calculated = await calculateOrder(input, transaction);
+      if (input.paymentMethod === 'CASH' && input.cashTenderedCents != null && input.cashTenderedCents < calculated.totalCents) {
+        throw new OrderValidationError('INSUFFICIENT_CASH', 'O valor informado para troco deve ser igual ou superior ao total do pedido.', 400);
+      }
       return transaction.order.create({ data: {
         customerName: input.customerName, phone: input.phone, deliveryMethod: input.deliveryMethod,
         address: input.address || null, addressNumber: input.addressNumber || null, complement: input.complement || null,
         neighborhood: input.neighborhood || null, reference: input.reference || null, paymentMethod: input.paymentMethod,
+        ...(input.checkoutToken ? { checkoutToken: input.checkoutToken } : {}),
         subtotalCents: calculated.subtotalCents, deliveryFeeCents: calculated.deliveryFeeCents, totalCents: calculated.totalCents,
+        ...(input.paymentMethod === 'CASH' && input.cashTenderedCents != null ? {
+          cashTenderedCents: input.cashTenderedCents,
+          cashChangeCents: input.cashTenderedCents - calculated.totalCents
+        } : {}),
         ...(input.paymentMethod === 'PIX' ? { orderStatus: 'PAYMENT_PENDING' } : {}),
         ...(proofType ? { pixProofUrl, pixProofMime: proofType.mime, pixProofStatus: 'SENT', pixProofUploadedAt: new Date() } : {}),
         items: { create: calculated.items }
@@ -720,6 +758,10 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
       return res.status(201).json({ order: orderPayload(order), payment: { configured: true, type: 'CASH' } });
     }
 
+    if (input.paymentMethod === 'CARD_ON_DELIVERY') {
+      return res.status(201).json({ order: orderPayload(order), payment: { configured: true, type: 'CARD_ON_DELIVERY' } });
+    }
+
     if (!mercadoPagoAccessToken || !hasMercadoPagoToken) return res.status(503).json({ error: 'Mercado Pago nao configurado no servidor.' });
     const payment = await createCheckoutPreference(order);
     const savedOrder = await prisma.order.update({ where: { id: order.id }, data: { preferenceId: payment.id, orderStatus: 'PAYMENT_PENDING' }, include: { items: true } });
@@ -727,6 +769,10 @@ app.post('/api/orders', handleProofUpload, async (req, res) => {
     return res.status(201).json({ order: orderPayload(savedOrder), payment: { configured: true, type: 'CARD', preferenceId: payment.id, checkoutUrl, mode: mercadoPagoMode } });
   } catch (error) {
     if (proofPath) await fs.promises.unlink(proofPath).catch(() => {});
+    if (error.code === 'P2002' && parsed.data.checkoutToken) {
+      const existingOrder = await prisma.order.findUnique({ where: { checkoutToken: parsed.data.checkoutToken }, include: { items: true } });
+      if (existingOrder) return respondWithExistingOrder(res, existingOrder);
+    }
     if (error instanceof OrderValidationError) return res.status(error.status).json({ error: error.message });
     if (parsed.data.paymentMethod === 'PIX') {
       const requestId = crypto.randomUUID();
@@ -890,9 +936,12 @@ app.patch('/api/admin/orders/:id/status', requireAdmin, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Status invalido.' });
   const existingOrder = await prisma.order.findUnique({ where: { id: req.params.id } });
   if (!existingOrder) return res.status(404).json({ error: 'Pedido nao encontrado.' });
+  if (parsed.data.status === 'PAID' && ['PIX', 'CARD'].includes(existingOrder.paymentMethod) && existingOrder.paymentStatus !== 'APPROVED') {
+    return res.status(409).json({ error: 'Confirme o pagamento pelo comprovante Pix ou pela integração antes de marcar como pago.' });
+  }
   const data = { orderStatus: parsed.data.status };
-  if (existingOrder.paymentMethod === 'CASH' && parsed.data.status === 'PAID') data.paymentStatus = 'APPROVED';
-  if (existingOrder.paymentMethod === 'CASH' && parsed.data.status === 'CANCELLED') data.paymentStatus = 'CANCELLED';
+  if (['CASH', 'CARD_ON_DELIVERY'].includes(existingOrder.paymentMethod) && parsed.data.status === 'PAID') data.paymentStatus = 'APPROVED';
+  if (parsed.data.status === 'CANCELLED') data.paymentStatus = 'CANCELLED';
   const order = await prisma.order.update({ where: { id: req.params.id }, data, include: { items: true } });
   res.json(orderPayload(order));
 });
@@ -901,6 +950,7 @@ app.patch('/api/admin/orders/:id/proof-status', requireAdmin, async (req, res) =
   if (!parsed.success) return res.status(400).json({ error: 'Status do comprovante invalido.' });
   const order = await prisma.order.findUnique({ where: { id: req.params.id }, include: { items: true } });
   if (!order) return res.status(404).json({ error: 'Pedido nao encontrado.' });
+  if (order.paymentMethod !== 'PIX' || !order.pixProofUrl) return res.status(409).json({ error: 'Este pedido não possui comprovante Pix para conferência.' });
   const nextStatus = parsed.data.status === 'CONFIRMED' ? { paymentStatus: 'APPROVED', orderStatus: 'PAID', pixProofStatus: 'CONFIRMED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' } : { paymentStatus: 'REJECTED', orderStatus: 'CANCELLED', pixProofStatus: 'REJECTED', pixProofConfirmedAt: new Date(), pixProofConfirmedBy: req.admin?.email || 'admin' };
   const updated = await prisma.order.update({ where: { id: order.id }, data: nextStatus, include: { items: true } });
   res.json(orderPayload(updated));

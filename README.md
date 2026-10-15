@@ -9,8 +9,9 @@ O projeto original era uma pagina estatica em HTML, CSS e JavaScript puro, sem b
 - Frontend: HTML/CSS/JavaScript vanilla servido pelo Express.
 - Backend: Node.js + Express.
 - Banco: SQLite local com Prisma. Em producao, pode ser trocado por PostgreSQL alterando o datasource e `DATABASE_URL`.
-- Pagamento no checkout: Pix manual. O pedido e o comprovante sao validados e registrados pelo backend; a confirmacao do pagamento continua manual no Admin. A chave configurada e exibida e pode ser copiada; o QR so aparece com um BR Code real que contenha a mesma chave.
-- Compartilhamento: Web Share API envia mensagem e arquivo quando suportado. Nos demais dispositivos, abre o WhatsApp/WhatsApp Web com a mensagem pronta e orienta o cliente a anexar o comprovante.
+- Pagamento no checkout: Pix manual, dinheiro na entrega e cartao na entrega. Pix permanece pendente ate a equipe conferir o comprovante no Admin; dinheiro e cartao na entrega permanecem pendentes ate a equipe confirmar o recebimento. O valor informado para troco e validado e salvo separadamente do total.
+- Reenvio seguro: um token unico por checkout evita criar pedidos duplicados quando o navegador repete a mesma requisicao.
+- Confirmacao do checkout: apos registrar o pedido no backend, a pagina mostra o numero, valores e status e oferece um link do WhatsApp com o resumo do pedido.
 - Compatibilidade legada: rotas Mercado Pago e webhook continuam isolados para pedidos antigos e integrações anteriores; o checkout atual nao cria pagamentos nem redireciona para o Mercado Pago.
 - Admin: `/admin`, cookie HTTP-only assinado com JWT e senha armazenada com bcrypt.
 - WhatsApp: o cliente escolhe o WhatsApp no compartilhamento do proprio dispositivo. O checkout nao usa Cloud API, webhook WhatsApp, credenciais Meta ou CNPJ.
@@ -62,12 +63,14 @@ O backend consulta produtos, precos e taxa no banco; nunca aceita o total enviad
 - Configure as variaveis de ambiente no provedor; nao envie `.env` ao repositorio.
 - Execute `npm install`, `npm run prisma:generate`, `npm run db:migrate` e `npm run db:seed` no deploy inicial. `migrate deploy` aplica todas as migrações novas sem recriar o banco.
 - Configure dominio, HTTPS, `PUBLIC_URL` e CORS. A chave Pix padrão está no backend; configure `PIX_KEY` no Render apenas se precisar sobrescrevê-la. Configure `PIX_QR_PAYLOAD` somente quando tiver o BR Code real correspondente a essa mesma chave.
-- Para manter comprovantes entre deploys, monte um Persistent Disk no Render e defina `UPLOADS_DIR` para uma pasta dentro do ponto de montagem.
-- As fotos dos produtos usam o mesmo `UPLOADS_DIR` e ficam em `/uploads/`; mantenha o Persistent Disk montado nesse caminho também para que elas continuem disponíveis após novos deploys. Nenhuma variável nova é necessária.
+- Causa das alteracoes que desaparecem: SQLite e arquivos enviados ficam no sistema de arquivos local. Em hospedagens com disco efemero, dados podem sumir em novo deploy ou reinicio. O seed nao substitui imagens quando ja existem produtos no banco; o disco efemero torna dados gravados indisponiveis.
+- Para manter pedidos, produtos e configuracoes, configure `DATABASE_URL` para um banco persistente ou mova o SQLite para um Persistent Disk. Em Render com SQLite, monte o disco e use, por exemplo, `DATABASE_URL=file:/var/data/dev.db`.
+- Para manter comprovantes e fotos de produtos, configure `UPLOADS_DIR=/var/data/uploads` em um Persistent Disk montado. Os arquivos sao publicados em `/uploads/`; nao use diretorio temporario ou efemero.
+- A migracao `0005_delivery_payment_options` adiciona campos opcionais de troco e token idempotente, sem remover tabelas nem pedidos existentes.
 - A migração `0003_product_inventory` adiciona categoria, estoque informativo e disponibilidade manual; `0004_manual_product_availability` define todos os produtos existentes como disponíveis. Estoque vazio ou zerado não bloqueia produtos nem é reduzido pelas vendas.
 - A criação de pedidos valida o bairro e a disponibilidade manual no backend. Marque explicitamente Esgotado no Admin para bloquear compras; reative como Disponível para voltar a vender.
 - Configure logs, backups, alertas e rotacao das credenciais.
 
 ## O que ainda depende de servico externo
 
-O Pix manual depende de uma chave real e da conferencia humana do comprovante. O QR tambem depende de um payload BR Code valido e correspondente fornecido pelo banco/PSP. Compartilhar com o WhatsApp depende do navegador/dispositivo; quando nao ha suporte a arquivos, o cliente precisa anexar o comprovante manualmente.
+O Pix manual depende de uma chave real e da conferencia humana do comprovante. O QR tambem depende de um payload BR Code valido e correspondente fornecido pelo banco/PSP. A chave Pix existente no backend e mantida; o titular e o banco exibidos no checkout sao MELIZIA SUELLY DA SILVA e Santander. Compartilhar com o WhatsApp depende do navegador/dispositivo; quando nao ha suporte a arquivos, o cliente precisa anexar o comprovante manualmente. A hospedagem precisa de banco e volume de arquivos persistentes configurados; o codigo nao consegue tornar duravel um disco efemero do provedor.

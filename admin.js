@@ -1,6 +1,8 @@
 const $ = selector => document.querySelector(selector);
 const money = cents => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((Number(cents || 0) / 100));
 const labels = { RECEIVED: 'Recebido', PAYMENT_PENDING: 'Pagamento pendente', PAID: 'Pago', PREPARING: 'Em preparo', OUT_FOR_DELIVERY: 'Saiu para entrega', COMPLETED: 'Finalizado', CANCELLED: 'Cancelado' };
+const paymentMethodLabels = { PIX: 'Pix', CASH: 'Dinheiro na entrega', CARD_ON_DELIVERY: 'Cartão na entrega', CARD: 'Cartão online' };
+const paymentStatusLabels = { PENDING: 'Pendente', APPROVED: 'Pago', REJECTED: 'Recusado', CANCELLED: 'Cancelado' };
 const proofLabels = { NONE: 'Sem comprovante', SENT: 'Comprovante enviado', CONFIRMED: 'Comprovante conferido', REJECTED: 'Comprovante recusado' };
 let orders = [];
 let currentCashPeriod = 'today';
@@ -29,9 +31,11 @@ function showAdmin() {
 function renderOrders() {
   $('[data-orders]').innerHTML = orders.length ? orders.map(order => {
     const proofStatus = order.pixProofStatus || 'NONE';
-    const proofAction = order.pixProofUrl ? `<a class="mini-link" href="${order.pixProofUrl}" target="_blank" rel="noreferrer">Ver comprovante</a>` : '<span class="muted">Sem comprovante</span>';
-    const actions = order.pixProofUrl ? `<div class="proof-actions"><button type="button" class="btn btn-secondary" data-proof-confirm="${order.id}">Confirmar pagamento</button><button type="button" class="btn btn-secondary" data-proof-reject="${order.id}">Recusar comprovante</button></div>` : '';
-    return `<article class="admin-order"><div class="order-top"><div><strong>#${order.number}</strong><span>${new Date(order.createdAt).toLocaleString('pt-BR')}</span></div><select data-order-status="${order.id}">${Object.entries(labels).map(([value, label]) => `<option value="${value}" ${order.orderStatus === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><h3>${order.customerName}</h3><p>${order.phone} · ${order.deliveryMethod === 'DELIVERY' ? `${order.address}, ${order.addressNumber} - ${order.neighborhood}` : 'Retirada no local'}</p><ul>${order.items.map(item => `<li>${item.quantity}x ${item.productName} (${money(item.unitPriceCents)})</li>`).join('')}</ul><div class="order-total"><span>${order.paymentStatus === 'APPROVED' ? 'Pagamento aprovado' : 'Pagamento pendente'}</span><strong>${money(order.totalCents)}</strong></div><div class="proof-row"><span>${proofLabels[proofStatus] || proofLabels.NONE}</span>${proofAction}</div>${actions}</article>`;
+    const proofAction = order.pixProofUrl ? `<a class="mini-link" href="${escapeHtml(order.pixProofUrl)}" target="_blank" rel="noreferrer">Ver comprovante</a>` : '<span class="muted">Sem comprovante</span>';
+    const actions = order.pixProofUrl && order.paymentStatus !== 'APPROVED' ? `<div class="proof-actions"><button type="button" class="btn btn-secondary" data-proof-confirm="${escapeHtml(order.id)}">Confirmar pagamento</button><button type="button" class="btn btn-secondary" data-proof-reject="${escapeHtml(order.id)}">Recusar comprovante</button></div>` : '';
+    const address = order.deliveryMethod === 'DELIVERY' ? `${order.address || ''}, ${order.addressNumber || ''} - ${order.neighborhood || ''}` : 'Retirada no local';
+    const change = order.cashTenderedCents == null ? '' : `<p class="order-cash-change">Dinheiro informado: ${money(order.cashTenderedCents)} · Troco: ${money(order.cashChangeCents)}</p>`;
+    return `<article class="admin-order"><div class="order-top"><div><strong>#${order.number}</strong><span>${new Date(order.createdAt).toLocaleString('pt-BR')}</span></div><select data-order-status="${escapeHtml(order.id)}">${Object.entries(labels).map(([value, label]) => `<option value="${value}" ${order.orderStatus === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div><h3>${escapeHtml(order.customerName)}</h3><p>${escapeHtml(order.phone)} · ${escapeHtml(address)}</p><ul>${order.items.map(item => `<li>${item.quantity}x ${escapeHtml(item.productName)} (${money(item.unitPriceCents)})</li>`).join('')}</ul><div class="order-total"><span>${escapeHtml(paymentMethodLabels[order.paymentMethod] || order.paymentMethod)} · Pagamento ${escapeHtml(paymentStatusLabels[order.paymentStatus] || order.paymentStatus)}</span><strong>${money(order.totalCents)}</strong></div>${change}<div class="proof-row"><span>${proofLabels[proofStatus] || proofLabels.NONE}</span>${proofAction}</div>${actions}</article>`;
   }).join('') : '<p>Nenhum pedido ainda.</p>';
 }
 
@@ -136,7 +140,10 @@ document.addEventListener('change', async event => {
   try {
     await request(`/api/admin/orders/${event.target.dataset.orderStatus}/status`, { method: 'PATCH', body: JSON.stringify({ status: event.target.value }) });
     await refresh();
-  } catch (error) { alert(error.message); }
+  } catch (error) {
+    alert(error.message);
+    await refresh();
+  }
 });
 
 const productForm = $('[data-product-form]');

@@ -260,20 +260,32 @@
       <div class="checkout-header"><div><p class="eyebrow">Finalizar pedido</p><h2>Quase lá</h2></div><button class="icon-button" type="button" data-close-checkout aria-label="Fechar checkout">&times;</button></div>
       <div class="checkout-grid">
         <section><h3>Dados do cliente</h3><form data-checkout-form>
+          <input type="hidden" name="checkoutToken" data-checkout-token />
           <label>Nome<input name="customerName" required minlength="2" autocomplete="name" /></label>
           <label>WhatsApp<input name="phone" required autocomplete="tel" /></label>
           <fieldset><legend>Forma de entrega</legend><label class="choice"><input type="radio" name="deliveryMethod" value="DELIVERY" checked /> Entrega</label><label class="choice"><input type="radio" name="deliveryMethod" value="PICKUP" /> Retirada no local</label></fieldset>
           <div class="address-fields" data-address-fields><label>Endereço<input name="address" autocomplete="street-address" /></label><div class="form-row"><label>Número<input name="addressNumber" /></label><label>Bairro<input name="neighborhood" /><span class="validation-message" data-neighborhood-message aria-live="assertive" hidden>Não entregamos neste bairro. Rota indisponível.</span></label></div><label>Complemento<input name="complement" /></label><label>Ponto de referência<input name="reference" /></label></div>
-          <input type="hidden" name="paymentMethod" value="PIX" />
-          <section class="pix-payment" aria-labelledby="pix-payment-title">
-            <h3 id="pix-payment-title">Pague via PIX</h3>
+          <fieldset class="payment-methods"><legend>Forma de pagamento</legend>
+            <label class="choice"><input type="radio" name="paymentMethod" value="PIX" checked /> Pix</label>
+            <label class="choice"><input type="radio" name="paymentMethod" value="CASH" /> Dinheiro na entrega</label>
+            <label class="choice"><input type="radio" name="paymentMethod" value="CARD_ON_DELIVERY" /> Cartão na entrega</label>
+          </fieldset>
+          <section class="pix-payment" data-pix-payment aria-labelledby="pix-payment-title">
+            <h3 id="pix-payment-title">Pagamento via Pix</h3>
+            <p>Valor do pedido: <strong data-pix-total>R$ 0,00</strong></p>
             <img class="pix-qr" data-pix-qr alt="QR Code para pagamento via Pix" hidden />
             <p class="pix-config-message" data-pix-config-message>Carregando dados do Pix...</p>
-            <p class="pix-key-line"><strong>Chave PIX:</strong> <code data-pix-key></code></p>
-            <button class="btn btn-secondary" type="button" data-copy-pix-key disabled>Copiar chave PIX</button>
+            <p class="pix-key-line"><strong>Chave Pix:</strong> <code data-pix-key></code></p>
+            <button class="btn btn-secondary" type="button" data-copy-pix-key disabled>Copiar chave Pix</button>
+            <div class="pix-account-details">
+              <p><strong>Titular:</strong> MELIZIA SUELLY DA SILVA</p>
+              <p><strong>Banco:</strong> Santander</p>
+            </div>
+            <p class="pix-recipient-warning">Antes de confirmar o Pix no seu banco, confira se o nome do destinatário é MELIZIA SUELLY DA SILVA e se o banco exibido corresponde ao Santander.</p>
+            <p>O pedido só será marcado como pago após a confirmação do recebimento.</p>
           </section>
-          <div class="pix-proof-field">
-            <p>Depois de realizar o pagamento, envie o comprovante para confirmar seu pedido.</p>
+          <div class="pix-proof-field" data-pix-proof-field>
+            <p>Depois de realizar o pagamento, envie o comprovante para a equipe conferir. O envio não confirma o pagamento automaticamente.</p>
             <label class="proof-file-label">Selecionar comprovante<input type="file" name="pixProof" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" /></label>
             <div class="pix-proof-preview" data-pix-proof-preview hidden>
               <img data-pix-proof-image alt="Prévia do comprovante selecionado" hidden />
@@ -281,9 +293,20 @@
             </div>
             <p class="pix-proof-status" data-pix-proof-status aria-live="polite">Selecione um arquivo de até 10 MB.</p>
           </div>
-          <button class="btn btn-primary" type="submit" data-send-order disabled>Enviar pedido pelo WhatsApp</button><p class="form-message" data-form-message aria-live="polite"></p>
+          <section class="delivery-payment" data-cash-payment hidden>
+            <p>O pagamento será feito em dinheiro ao entregador no recebimento do pedido.</p>
+            <label class="choice"><input type="checkbox" data-no-change checked /> Não preciso de troco</label>
+            <label data-cash-tendered-label>Vou pagar com
+              <input type="number" name="cashTendered" data-cash-tendered min="0.01" step="0.01" inputmode="decimal" placeholder="Ex.: 50,00" disabled />
+            </label>
+            <p data-cash-change aria-live="polite"></p>
+          </section>
+          <section class="delivery-payment" data-card-payment hidden>
+            <p>O pagamento será feito ao entregador, no momento da entrega, por meio de cartão. Nenhum dado do cartão é solicitado ou cobrado pelo site.</p>
+          </section>
+          <button class="btn btn-primary" type="submit" data-send-order disabled>Registrar pedido</button><p class="form-message" data-form-message aria-live="polite"></p><a class="btn btn-secondary order-whatsapp-link" data-order-whatsapp target="_blank" rel="noopener noreferrer" hidden>Abrir WhatsApp para enviar o pedido</a>
         </form></section>
-        <section class="checkout-order"><h3>Resumo do pedido</h3><div data-checkout-items></div><div class="summary-lines"><div><span>Subtotal</span><strong data-checkout-subtotal>R$ 0,00</strong></div><div><span>Entrega</span><strong data-checkout-delivery>R$ 0,00</strong></div><div class="total-row"><span>Total</span><strong data-checkout-total>R$ 0,00</strong></div></div><div class="payment-result" data-payment-result></div></section>
+        <section class="checkout-order"><h3>Resumo do pedido</h3><div data-checkout-items></div><div class="summary-lines"><div><span>Subtotal</span><strong data-checkout-subtotal>R$ 0,00</strong></div><div><span>Entrega</span><strong data-checkout-delivery>R$ 0,00</strong></div><div class="total-row"><span>Total</span><strong data-checkout-total>R$ 0,00</strong></div></div><p class="checkout-payment-summary">Pagamento: <strong data-checkout-payment>Pix</strong></p><div class="payment-result" data-payment-result></div></section>
       </div>
     </dialog>
 

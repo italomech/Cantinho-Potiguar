@@ -54,6 +54,9 @@ model Order {
   feeCents              Int             @default(0)
   paymentMethod         PaymentMethod
   paymentStatus         PaymentStatus   @default(PENDING)
+  checkoutToken         String?         @unique
+  cashTenderedCents     Int?
+  cashChangeCents       Int?
   orderStatus           OrderStatus     @default(RECEIVED)
   paymentId             String?
   preferenceId          String?
@@ -116,6 +119,7 @@ enum PaymentMethod {
   PIX
   CARD
   CASH
+  CARD_ON_DELIVERY
 }
 
 enum PaymentStatus {

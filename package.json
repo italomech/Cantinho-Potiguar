@@ -17,7 +17,8 @@
     "test:pix:mercadopago:legacy": "node test-mercadopago-pix.js",
     "test:status": "node test-mercadopago-status.js",
     "test:whatsapp": "node test-whatsapp.js",
-    "test:cash": "node test-cash.js"
+    "test:cash": "node test-cash.js",
+    "test:payment-options": "node test-payment-options.js"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",
